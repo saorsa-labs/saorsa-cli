@@ -1,6 +1,6 @@
 [package]
 name = "cli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.82"
 authors = ["David Irvine <david.irvine@saorsa.net>"]
@@ -58,6 +58,10 @@ toml = "0.8"
 # Async utilities
 futures = "0.3"
 libloading = "0.8"
+
+# Version management
+semver = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3"

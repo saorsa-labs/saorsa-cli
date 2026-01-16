@@ -291,6 +291,13 @@ jobs:
         find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} release-files/ \;
         ls -la release-files/
 
+    - name: Generate checksums
+      run: |
+        cd release-files
+        sha256sum * > CHECKSUMS.txt
+        echo "Generated checksums:"
+        cat CHECKSUMS.txt
+
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:

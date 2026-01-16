@@ -1,7 +1,22 @@
 use anyhow::Result;
+use clap::Parser;
 use std::io::{self};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+/// Terminal Markdown Browser/Editor with Git integration, syntax highlighting, and media support
+#[derive(Parser, Debug)]
+#[command(
+    name = "sb",
+    author,
+    version,
+    about = "Terminal Markdown Browser/Editor with Git integration"
+)]
+struct Args {
+    /// Root directory to browse (defaults to current directory)
+    #[arg(default_value = ".")]
+    root: PathBuf,
+}
 
 use ratatui::crossterm::{
     event::{
@@ -33,10 +48,12 @@ impl Drop for TermGuard {
 }
 
 fn main() -> Result<()> {
-    let root = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or(std::env::current_dir()?);
+    let args = Args::parse();
+    let root = if args.root.as_os_str() == "." {
+        std::env::current_dir()?
+    } else {
+        args.root
+    };
     let mut app = App::new(root)?;
     run(&mut app)
 }

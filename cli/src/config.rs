@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
-
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -16,6 +17,9 @@ pub struct Config {
     pub cache: CacheConfig,
     /// User behavior preferences and settings
     pub behavior: BehaviorConfig,
+    /// Version state for auto-update tracking
+    #[serde(default)]
+    pub version_state: VersionState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +43,22 @@ pub struct BehaviorConfig {
     pub prefer_local_build: bool,
 }
 
+/// Version state tracking for the auto-update system.
+///
+/// Stores information about installed binary versions and update checks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VersionState {
+    /// Map of binary name to installed version (e.g., "sb" -> "0.3.12")
+    #[serde(default)]
+    pub installed_versions: HashMap<String, String>,
+    /// Timestamp of last update check (for rate limiting)
+    #[serde(default)]
+    pub last_update_check: Option<DateTime<Utc>>,
+    /// Latest version available from GitHub (cached)
+    #[serde(default)]
+    pub latest_version: Option<String>,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -57,6 +77,7 @@ impl Default for Config {
                 use_system_binaries: false,
                 prefer_local_build: false,
             },
+            version_state: VersionState::default(),
         }
     }
 }
@@ -138,5 +159,48 @@ impl Config {
         if use_system {
             self.behavior.use_system_binaries = true;
         }
+    }
+
+    /// Record that a binary was installed at a specific version.
+    #[allow(dead_code)] // Used by update system in later phases
+    pub fn record_installed_version(&mut self, binary: &str, version: &str) {
+        self.version_state
+            .installed_versions
+            .insert(binary.to_string(), version.to_string());
+    }
+
+    /// Get the installed version for a binary, if known.
+    #[allow(dead_code)] // Used by update system in later phases
+    pub fn get_installed_version(&self, binary: &str) -> Option<&String> {
+        self.version_state.installed_versions.get(binary)
+    }
+
+    /// Check if an update check is needed (based on 1 hour cache).
+    #[allow(dead_code)] // Used by update system in later phases
+    pub fn should_check_for_updates(&self) -> bool {
+        if !self.behavior.auto_update_check {
+            return false;
+        }
+
+        match self.version_state.last_update_check {
+            Some(last_check) => {
+                let cache_duration = chrono::Duration::hours(1);
+                Utc::now() - last_check > cache_duration
+            }
+            None => true,
+        }
+    }
+
+    /// Record an update check with the latest available version.
+    #[allow(dead_code)] // Used by update system in later phases
+    pub fn record_update_check(&mut self, latest_version: Option<String>) {
+        self.version_state.last_update_check = Some(Utc::now());
+        self.version_state.latest_version = latest_version;
+    }
+
+    /// Get the cached latest version, if available.
+    #[allow(dead_code)] // Used by update system in later phases
+    pub fn get_latest_version(&self) -> Option<&String> {
+        self.version_state.latest_version.as_ref()
     }
 }

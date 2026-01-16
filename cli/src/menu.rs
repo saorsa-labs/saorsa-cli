@@ -20,6 +20,7 @@ pub enum MenuChoice {
     RunSB,
     RunSDisk,
     UpdateBinaries,
+    UpdateCLI,
     Settings,
     Plugins,
     Exit,
@@ -27,31 +28,58 @@ pub enum MenuChoice {
 
 pub struct Menu {
     state: ListState,
-    items: Vec<(&'static str, MenuChoice)>,
+    items: Vec<(String, MenuChoice)>,
     sb_path: Option<PathBuf>,
     sdisk_path: Option<PathBuf>,
+    update_available: Option<String>,
 }
 
 impl Menu {
     pub fn new() -> Self {
-        let items = vec![
-            ("📚 Run Saorsa Browser (sb)", MenuChoice::RunSB),
-            ("💾 Run Saorsa Disk (sdisk)", MenuChoice::RunSDisk),
-            ("🔄 Update Binaries", MenuChoice::UpdateBinaries),
-            ("⚙️  Settings", MenuChoice::Settings),
-            ("🔌 Plugins", MenuChoice::Plugins),
-            ("🚪 Exit", MenuChoice::Exit),
-        ];
-
         let mut state = ListState::default();
         state.select(Some(0));
 
-        Self {
+        let mut menu = Self {
             state,
-            items,
+            items: Vec::new(),
             sb_path: None,
             sdisk_path: None,
+            update_available: None,
+        };
+        menu.rebuild_items();
+        menu
+    }
+
+    /// Set update status and rebuild menu items.
+    pub fn set_update_status(&mut self, latest_version: Option<String>) {
+        self.update_available = latest_version;
+        self.rebuild_items();
+    }
+
+    /// Rebuild menu items based on current state.
+    fn rebuild_items(&mut self) {
+        self.items = vec![
+            ("📚 Run Saorsa Browser (sb)".to_string(), MenuChoice::RunSB),
+            (
+                "💾 Run Saorsa Disk (sdisk)".to_string(),
+                MenuChoice::RunSDisk,
+            ),
+            ("🔄 Update Binaries".to_string(), MenuChoice::UpdateBinaries),
+        ];
+
+        // Add update option if available
+        if let Some(version) = &self.update_available {
+            self.items.push((
+                format!("⬆️  Update CLI to v{}", version),
+                MenuChoice::UpdateCLI,
+            ));
         }
+
+        self.items.extend([
+            ("⚙️  Settings".to_string(), MenuChoice::Settings),
+            ("🔌 Plugins".to_string(), MenuChoice::Plugins),
+            ("🚪 Exit".to_string(), MenuChoice::Exit),
+        ]);
     }
 
     pub fn set_binary_paths(&mut self, sb_path: Option<PathBuf>, sdisk_path: Option<PathBuf>) {
@@ -104,11 +132,17 @@ impl Menu {
     }
 
     fn draw(&mut self, f: &mut Frame) {
+        // Adjust header height to accommodate update notification
+        let header_height = if self.update_available.is_some() {
+            4
+        } else {
+            3
+        };
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(2)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(header_height),
                 Constraint::Min(10),
                 Constraint::Length(4),
             ])
@@ -120,7 +154,7 @@ impl Menu {
     }
 
     fn draw_header(&self, f: &mut Frame, area: Rect) {
-        let header = Paragraph::new(vec![
+        let mut lines = vec![
             Line::from(vec![Span::styled(
                 "Saorsa CLI",
                 Style::default()
@@ -128,9 +162,21 @@ impl Menu {
                     .add_modifier(Modifier::BOLD),
             )]),
             Line::from(vec![Span::raw("Interactive menu for Saorsa tools")]),
-        ])
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::BOTTOM));
+        ];
+
+        // Add update notification if available
+        if let Some(version) = &self.update_available {
+            lines.push(Line::from(vec![Span::styled(
+                format!("Update available: v{}", version),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+        }
+
+        let header = Paragraph::new(lines)
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::BOTTOM));
 
         f.render_widget(header, area);
     }
@@ -161,6 +207,9 @@ impl Menu {
                         } else {
                             style = style.fg(Color::Green);
                         }
+                    }
+                    MenuChoice::UpdateCLI => {
+                        style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
                     }
                     _ => {}
                 }

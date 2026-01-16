@@ -5,15 +5,21 @@ mod menu;
 mod platform;
 mod plugin;
 mod runner;
+mod self_update;
+mod updater;
+mod version;
 
 use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::menu::{Menu, MenuChoice};
 use crate::platform::Platform;
 use crate::runner::BinaryRunner;
+use crate::updater::{UpdateCheckResult, UpdateChecker};
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 
 // Dialoguer is already imported in the functions where needed
@@ -92,8 +98,26 @@ async fn main() -> Result<()> {
 
     tracing::debug!("Detected platform: {:?}", platform);
 
-    // Initialize components
-    let downloader = Downloader::new(config.github.owner.clone(), config.github.repo.clone())?;
+    // Initialize components with Arc wrappers for thread-safe sharing
+    let downloader = Arc::new(Downloader::new(
+        config.github.owner.clone(),
+        config.github.repo.clone(),
+    )?);
+
+    // Wrap config in Arc<RwLock<>> for thread-safe access from background task
+    let config = Arc::new(RwLock::new(config));
+
+    // Spawn background update checker (non-blocking)
+    let update_result: Arc<RwLock<Option<UpdateCheckResult>>> = Arc::new(RwLock::new(None));
+    {
+        let update_checker = UpdateChecker::new(Arc::clone(&config), Arc::clone(&downloader));
+        let update_result_clone = Arc::clone(&update_result);
+        tokio::spawn(async move {
+            if let Some(result) = update_checker.check().await {
+                *update_result_clone.write().await = Some(result);
+            }
+        });
+    }
 
     let runner = BinaryRunner::new();
 
@@ -108,10 +132,11 @@ async fn main() -> Result<()> {
 
     // Handle direct run mode
     if let Some(tool) = args.run.as_ref() {
+        let config_read = config.read().await;
         return run_tool_directly(
             tool,
             args.tool_args,
-            &config,
+            &config_read,
             &platform,
             &downloader,
             &runner,
@@ -124,9 +149,18 @@ async fn main() -> Result<()> {
     let mut menu = Menu::new();
 
     loop {
+        // Refresh update status (background task may have completed)
+        if let Some(result) = update_result.read().await.as_ref() {
+            if result.update_available {
+                menu.set_update_status(result.latest_version.clone());
+            }
+        }
+
         // Check for binaries and update menu
+        let config_read = config.read().await;
         let (sb_path, sdisk_path) =
-            check_binaries(&config, &platform, &downloader, &runner).await?;
+            check_binaries(&config_read, &platform, &downloader, &runner).await?;
+        drop(config_read); // Release lock before menu interaction
         menu.set_binary_paths(sb_path.clone(), sdisk_path.clone());
 
         // Show menu and get choice
@@ -224,9 +258,52 @@ async fn main() -> Result<()> {
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input)?;
             }
+            MenuChoice::UpdateCLI => {
+                use dialoguer::{theme::ColorfulTheme, Confirm};
+
+                // Confirm with user
+                let confirm = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Download and install update? This will restart the application.")
+                    .default(true)
+                    .interact()?;
+
+                if !confirm {
+                    println!("Update cancelled.");
+                    println!("Press Enter to continue...");
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input)?;
+                    continue;
+                }
+
+                // Perform update
+                match self_update::perform_self_update(&downloader, &platform).await {
+                    Ok(result) => {
+                        if result.needs_restart {
+                            println!("\nRestarting with new version...");
+                            if let Err(e) = self_update::restart() {
+                                println!("Failed to restart: {}", e);
+                                println!("Please manually restart the application.");
+                                println!("Press Enter to exit...");
+                                let mut input = String::new();
+                                std::io::stdin().read_line(&mut input)?;
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("Update failed: {}", e);
+                        println!("Press Enter to continue...");
+                        let mut input = String::new();
+                        std::io::stdin().read_line(&mut input)?;
+                    }
+                }
+            }
             MenuChoice::Settings => {
-                config = show_settings_menu(config)?;
-                config.save().context("Failed to save configuration")?;
+                let mut config_write = config.write().await;
+                *config_write = show_settings_menu(config_write.clone())?;
+                config_write
+                    .save()
+                    .context("Failed to save configuration")?;
             }
             MenuChoice::Plugins => {
                 show_plugins_menu(&mut plugin_manager)?;

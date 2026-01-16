@@ -3,8 +3,10 @@ use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -21,6 +23,10 @@ pub enum DownloadError {
     NoMatchingAsset,
     #[error("No releases found")]
     NoReleases,
+    #[error("Checksum verification failed: expected {expected}, got {actual}")]
+    ChecksumMismatch { expected: String, actual: String },
+    #[error("Checksum not found for asset: {0}")]
+    ChecksumNotFound(String),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -29,6 +35,8 @@ pub struct GitHubRelease {
     pub name: Option<String>,
     pub assets: Vec<GitHubAsset>,
     pub published_at: String,
+    /// Release body/notes (may contain checksums for older releases)
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -130,6 +138,25 @@ impl Downloader {
             .download_asset(asset)
             .await
             .context("Failed to download asset")?;
+
+        // Verify checksum if available
+        match self.fetch_checksums(&release).await {
+            Ok(checksums) => {
+                if let Some(expected) = checksums.get(&asset.name) {
+                    Self::verify_checksum(&archive_path, expected)
+                        .context("Checksum verification failed")?;
+                    tracing::info!("Checksum verified for {}", asset.name);
+                } else {
+                    tracing::warn!(
+                        "No checksum found for {}, skipping verification",
+                        asset.name
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Could not fetch checksums: {}, skipping verification", e);
+            }
+        }
 
         self.extract_binary(&archive_path, binary_name, platform)
             .await
@@ -249,5 +276,184 @@ impl Downloader {
             }
             _ => anyhow::bail!("Unsupported archive format"),
         }
+    }
+
+    /// Fetch the CHECKSUMS.txt asset content from a release.
+    async fn fetch_checksums(
+        &self,
+        release: &GitHubRelease,
+    ) -> Result<HashMap<String, String>, DownloadError> {
+        // Look for CHECKSUMS.txt asset
+        let checksums_asset = release
+            .assets
+            .iter()
+            .find(|a| a.name == "CHECKSUMS.txt")
+            .ok_or_else(|| DownloadError::ChecksumNotFound("CHECKSUMS.txt".to_string()))?;
+
+        // Download the checksums file
+        let content = self
+            .client
+            .get(&checksums_asset.browser_download_url)
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        Ok(parse_checksums(&content))
+    }
+
+    /// Verify a file's SHA256 checksum.
+    fn verify_checksum(path: &Path, expected: &str) -> Result<(), DownloadError> {
+        let mut file = File::open(path)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 8192];
+
+        loop {
+            let bytes_read = file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..bytes_read]);
+        }
+
+        let actual = hex::encode(hasher.finalize());
+
+        if actual != expected {
+            return Err(DownloadError::ChecksumMismatch {
+                expected: expected.to_string(),
+                actual,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Parse sha256sum format: "hash  filename" (two spaces between hash and filename).
+fn parse_checksums(content: &str) -> HashMap<String, String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            // sha256sum format: hash followed by two spaces then filename
+            // Also handle single space for compatibility
+            let parts: Vec<&str> = line.splitn(2, |c: char| c.is_whitespace()).collect();
+            if parts.len() >= 2 {
+                let hash = parts[0].trim();
+                let filename = parts[1].trim();
+                if !hash.is_empty() && !filename.is_empty() {
+                    return Some((filename.to_string(), hash.to_string()));
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_parse_checksums_standard_format() {
+        // Standard sha256sum format with two spaces
+        let content = "abc123def456789012345678901234567890123456789012345678901234  file1.tar.gz\n\
+                       fedcba9876543210fedcba9876543210fedcba9876543210fedcba987654  file2.tar.gz\n";
+        let checksums = parse_checksums(content);
+
+        assert_eq!(checksums.len(), 2);
+        assert_eq!(
+            checksums.get("file1.tar.gz"),
+            Some(&"abc123def456789012345678901234567890123456789012345678901234".to_string())
+        );
+        assert_eq!(
+            checksums.get("file2.tar.gz"),
+            Some(&"fedcba9876543210fedcba9876543210fedcba9876543210fedcba987654".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_checksums_single_space() {
+        // Some tools use single space
+        let content = "abc123 file.tar.gz\n";
+        let checksums = parse_checksums(content);
+
+        assert_eq!(checksums.len(), 1);
+        assert_eq!(checksums.get("file.tar.gz"), Some(&"abc123".to_string()));
+    }
+
+    #[test]
+    fn test_parse_checksums_empty() {
+        let checksums = parse_checksums("");
+        assert!(checksums.is_empty());
+    }
+
+    #[test]
+    fn test_parse_checksums_blank_lines() {
+        let content = "\n\nabc123  file.tar.gz\n\n";
+        let checksums = parse_checksums(content);
+
+        assert_eq!(checksums.len(), 1);
+        assert_eq!(checksums.get("file.tar.gz"), Some(&"abc123".to_string()));
+    }
+
+    #[test]
+    fn test_parse_checksums_malformed_lines() {
+        // Lines without proper format should be skipped
+        let content = "invalid_line_no_space\n\
+                       abc123  valid.tar.gz\n\
+                         \n\
+                       also_invalid\n";
+        let checksums = parse_checksums(content);
+
+        assert_eq!(checksums.len(), 1);
+        assert_eq!(checksums.get("valid.tar.gz"), Some(&"abc123".to_string()));
+    }
+
+    #[test]
+    fn test_verify_checksum_success() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"test content").unwrap();
+        file.flush().unwrap();
+
+        // SHA256 of "test content"
+        let expected = "6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72";
+
+        assert!(Downloader::verify_checksum(file.path(), expected).is_ok());
+    }
+
+    #[test]
+    fn test_verify_checksum_failure() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"test content").unwrap();
+        file.flush().unwrap();
+
+        let result = Downloader::verify_checksum(file.path(), "wronghash");
+
+        assert!(result.is_err());
+        match result {
+            Err(DownloadError::ChecksumMismatch { expected, actual }) => {
+                assert_eq!(expected, "wronghash");
+                assert_eq!(
+                    actual,
+                    "6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72"
+                );
+            }
+            _ => panic!("Expected ChecksumMismatch error"),
+        }
+    }
+
+    #[test]
+    fn test_verify_checksum_empty_file() {
+        let file = NamedTempFile::new().unwrap();
+
+        // SHA256 of empty file
+        let expected = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+        assert!(Downloader::verify_checksum(file.path(), expected).is_ok());
     }
 }
