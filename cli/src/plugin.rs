@@ -12,15 +12,22 @@ pub trait Plugin: Send + Sync {
     fn execute(&self, args: &[String]) -> Result<()>;
 }
 
+/// Metadata about a loaded plugin.
+/// Some fields are reserved for future plugin management features.
 #[derive(Debug, Clone)]
 pub struct PluginMetadata {
     pub name: String,
     pub description: String,
     pub version: String,
+    #[allow(dead_code)]
     pub author: String,
+    #[allow(dead_code)]
     pub path: PathBuf,
 }
 
+/// Extended plugin information including help text.
+/// Reserved for future plugin details UI.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PluginInfo {
     pub metadata: PluginMetadata,
@@ -98,6 +105,7 @@ impl PluginManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn remove_plugin(&mut self, name: &str) -> Result<()> {
         if self.plugins.remove(name).is_some() {
             // How to remove the lib?
@@ -105,6 +113,7 @@ impl PluginManager {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn plugin_count(&self) -> usize {
         self.plugins.len()
     }
@@ -143,6 +152,9 @@ macro_rules! declare_plugin {
     };
 }
 
+/// Example plugin demonstrating the plugin API.
+/// This is reference code for plugin developers.
+#[allow(dead_code)]
 pub struct ExamplePlugin {
     name: String,
     description: String,

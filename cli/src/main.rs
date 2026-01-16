@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 mod config;
 mod downloader;
 mod error;
@@ -400,6 +399,8 @@ async fn run_tool_directly(
     Ok(())
 }
 
+/// Interactive settings configuration menu.
+#[allow(clippy::too_many_lines)]
 fn show_settings_menu(mut config: Config) -> Result<Config> {
     use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 
@@ -488,6 +489,9 @@ fn show_settings_menu(mut config: Config) -> Result<Config> {
     }
 }
 
+/// Display current configuration settings.
+/// Reserved for future settings display feature.
+#[allow(dead_code)]
 fn show_settings(config: &Config) -> Result<()> {
     println!("\n=== Current Settings ===\n");
     println!(
@@ -511,6 +515,9 @@ fn show_settings(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Display detailed information about a specific plugin.
+/// Reserved for future plugin details UI.
+#[allow(dead_code)]
 fn show_plugin_details(
     plugin_manager: &plugin::PluginManager,
     plugin: &plugin::PluginMetadata,

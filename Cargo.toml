@@ -5,6 +5,7 @@ resolver = "2"
 [workspace.package]
 authors = ["David Irvine <david.irvine@maidsafe.net>"]
 edition = "2021"
+rust-version = "1.82"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/dirvine/saorsa-cli"
 homepage = "https://github.com/dirvine/saorsa-cli"

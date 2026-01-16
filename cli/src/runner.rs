@@ -6,6 +6,8 @@ use std::process::Command;
 pub enum RunnerError {
     #[error("Binary not found: {0}")]
     BinaryNotFound(String),
+    /// Reserved for future non-zero exit code handling.
+    #[allow(dead_code)]
     #[error("Failed to execute binary: {0}")]
     NonZeroExit(i32),
 }

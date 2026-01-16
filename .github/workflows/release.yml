@@ -1,67 +1,288 @@
-name: Release-v2
+name: Release
+
 on:
   push:
     tags:
       - 'v*'
-      - 'sb-v*'
-      - 'sdisk-v*'
-      - 'cli-v*'
 
 permissions:
   contents: write
   packages: write
-  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_HOME: ${{ runner.temp }}/cargo
+  RUSTUP_HOME: ${{ runner.temp }}/rustup
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build Release - ubuntu
+  # Run tests and checks before any release
+  test:
+    name: Test
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+    - uses: actions/checkout@v4
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6
+      uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: stable
+        components: rustfmt, clippy
 
-    - name: Build all binaries
-      run: cargo build --release --workspace
-
-    - name: Package binaries
-      run: |
-        cd target/release
-        tar czf ../../sb-x86_64-unknown-linux-gnu.tar.gz sb
-        tar czf ../../sdisk-x86_64-unknown-linux-gnu.tar.gz sdisk
-        tar czf ../../cli-x86_64-unknown-linux-gnu.tar.gz saorsa
-        cd ../..
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - name: Cache cargo
+      uses: actions/cache@v4
       with:
-        name: binaries-linux
         path: |
-          sb-*.tar.gz
-          sdisk-*.tar.gz
-          cli-*.tar.gz
-        retention-days: 7
+          ${{ env.CARGO_HOME }}/registry
+          ${{ env.CARGO_HOME }}/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-  release:
-    name: Create Release
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+
+    - name: Clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+
+    - name: Run tests
+      run: cargo test --all --all-features
+
+  # Publish to crates.io
+  publish-crates:
+    name: Publish to crates.io
+    needs: test
     runs-on: ubuntu-latest
     steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Publish sb to crates.io
+      run: cargo publish -p sb --token ${{ secrets.CRATES_IO_TOKEN }}
+      continue-on-error: true
+
+    - name: Publish sdisk to crates.io
+      run: cargo publish -p sdisk --token ${{ secrets.CRATES_IO_TOKEN }}
+      continue-on-error: true
+
+    - name: Publish cli to crates.io
+      run: cargo publish -p cli --token ${{ secrets.CRATES_IO_TOKEN }}
+      continue-on-error: true
+
+  # Build release binaries for Linux and Windows
+  build-linux-windows:
+    name: Build - ${{ matrix.target }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Install musl-tools (Linux musl)
+      if: contains(matrix.target, 'linux-musl')
+      run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+    - name: Install Zig (for cross-compilation)
+      if: contains(matrix.target, 'linux-musl')
+      uses: goto-bus-stop/setup-zig@v2
+
+    - name: Install cargo-zigbuild
+      if: contains(matrix.target, 'linux-musl')
+      run: cargo install cargo-zigbuild
+
+    - name: Build release (musl with zigbuild)
+      if: contains(matrix.target, 'linux-musl')
+      run: cargo zigbuild --release --target ${{ matrix.target }} --workspace
+
+    - name: Build release (standard)
+      if: ${{ !contains(matrix.target, 'linux-musl') }}
+      run: cargo build --release --target ${{ matrix.target }} --workspace
+
+    - name: Package binaries (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        cd target/${{ matrix.target }}/release
+        tar czf ../../../saorsa-cli-${{ matrix.target }}.tar.gz sb sdisk saorsa
+        cd ../../..
+
+    - name: Package binaries (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        cd target/${{ matrix.target }}/release
+        7z a ../../../saorsa-cli-${{ matrix.target }}.zip sb.exe sdisk.exe saorsa.exe
+        cd ../../..
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: saorsa-cli-${{ matrix.target }}
+        path: saorsa-cli-${{ matrix.target }}.*
+        retention-days: 7
+
+  # Build and sign macOS binaries
+  build-macos:
+    name: Build - ${{ matrix.target }} (signed)
+    needs: test
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            arch: x86_64
+          - target: aarch64-apple-darwin
+            arch: arm64
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Build release
+      run: cargo build --release --target ${{ matrix.target }} --workspace
+
+    # Import Apple certificate for code signing
+    - name: Import Code Signing Certificate
+      env:
+        MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+        MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      run: |
+        # Create a temporary keychain
+        KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+        security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+        security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+        # Import certificate
+        echo "$MACOS_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
+        security import $RUNNER_TEMP/certificate.p12 -P "$MACOS_CERTIFICATE_PASSWORD" \
+          -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+        security list-keychain -d user -s $KEYCHAIN_PATH
+
+        # Allow codesign to access the key
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+    # Sign all binaries
+    - name: Sign Binaries
+      env:
+        MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      run: |
+        BINARIES="sb sdisk saorsa"
+        for binary in $BINARIES; do
+          echo "Signing $binary..."
+          codesign --force --options runtime --timestamp \
+            --sign "$MACOS_SIGNING_IDENTITY" \
+            "target/${{ matrix.target }}/release/$binary"
+
+          # Verify signature
+          codesign --verify --verbose=2 "target/${{ matrix.target }}/release/$binary"
+        done
+
+    # Create ZIP for notarization (Apple requires ZIP format)
+    - name: Create Notarization ZIP
+      run: |
+        cd target/${{ matrix.target }}/release
+        zip ../../../saorsa-cli-${{ matrix.target }}-notarize.zip sb sdisk saorsa
+        cd ../../..
+
+    # Submit for notarization
+    - name: Notarize Binaries
+      env:
+        MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.MACOS_NOTARIZATION_APPLE_ID }}
+        MACOS_NOTARIZATION_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_PASSWORD }}
+        MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
+      run: |
+        echo "Submitting for notarization..."
+        xcrun notarytool submit saorsa-cli-${{ matrix.target }}-notarize.zip \
+          --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
+          --password "$MACOS_NOTARIZATION_PASSWORD" \
+          --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
+          --wait
+
+    # Staple notarization ticket to binaries
+    - name: Staple Notarization Ticket
+      run: |
+        # Note: stapler only works on .app bundles and .pkg/.dmg files
+        # For standalone binaries, the notarization is verified online by Gatekeeper
+        # The binaries are now notarized and will pass Gatekeeper checks
+        echo "Binaries have been notarized. Gatekeeper will verify them online."
+
+    # Package signed binaries
+    - name: Package Signed Binaries
+      run: |
+        cd target/${{ matrix.target }}/release
+        tar czf ../../../saorsa-cli-${{ matrix.target }}.tar.gz sb sdisk saorsa
+        cd ../../..
+        # Clean up notarization zip
+        rm -f saorsa-cli-${{ matrix.target }}-notarize.zip
+
+    # Cleanup keychain
+    - name: Cleanup Keychain
+      if: always()
+      run: |
+        security delete-keychain $RUNNER_TEMP/signing.keychain-db || true
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: saorsa-cli-${{ matrix.target }}
+        path: saorsa-cli-${{ matrix.target }}.tar.gz
+        retention-days: 7
+
+  # Create GitHub release with all artifacts
+  github-release:
+    name: Create GitHub Release
+    needs: [build-linux-windows, build-macos, publish-crates]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Flatten artifacts
+      run: |
+        mkdir -p release-files
+        find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} release-files/ \;
+        ls -la release-files/
+
     - name: Create Release
-      uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ github.ref_name }}
-        body: |
-          ## Release ${{ github.ref_name }}
-
-          This is an automated release using GH_RELEASE_TOKEN.
+        name: Release ${{ github.ref_name }}
+        generate_release_notes: true
+        files: release-files/*
         draft: false
-        prerelease: false
+        prerelease: ${{ contains(github.ref_name, '-') }}
       env:
         GITHUB_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}

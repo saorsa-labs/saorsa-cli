@@ -53,7 +53,16 @@ fn run(app: &mut App) -> Result<()> {
 
     // Main loop
     loop {
-        terminal.draw(|f| ui(f, app).expect("Failed to render UI"))?;
+        // Store any rendering error to handle after draw completes
+        let mut render_error: Option<anyhow::Error> = None;
+        terminal.draw(|f| {
+            if let Err(e) = ui(f, app) {
+                render_error = Some(e);
+            }
+        })?;
+        if let Some(e) = render_error {
+            return Err(e);
+        }
         if event::poll(Duration::from_millis(200))? {
             match event::read()? {
                 Event::Key(k) => {

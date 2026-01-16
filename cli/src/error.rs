@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
+/// Custom error types for Saorsa CLI operations.
+/// Currently reserved for future use in more sophisticated error handling.
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum SaorsaError {
     #[error("I/O error during '{operation}' on '{path:?}': {source}")]
@@ -13,6 +16,7 @@ pub enum SaorsaError {
     Network { url: String, source: reqwest::Error },
 }
 
+#[allow(dead_code)]
 impl SaorsaError {
     pub fn io(operation: &str, source: std::io::Error) -> Self {
         SaorsaError::Io {
