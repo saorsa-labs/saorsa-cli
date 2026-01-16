@@ -123,6 +123,10 @@ jobs:
       with:
         perl-version: '5.38'
 
+    - name: Install NASM (Windows - for OpenSSL build)
+      if: matrix.os == 'windows-latest'
+      uses: ilammy/setup-nasm@v1
+
     - name: Build release (musl with zigbuild)
       if: contains(matrix.target, 'linux-musl')
       run: cargo zigbuild --release --target ${{ matrix.target }} --workspace
