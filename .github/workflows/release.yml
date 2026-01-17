@@ -221,6 +221,71 @@ jobs:
           codesign --verify --verbose=2 "target/${{ matrix.target }}/release/$binary"
         done
 
+    # Create PKG installer for easy installation
+    - name: Create PKG Installer
+      env:
+        MACOS_INSTALLER_IDENTITY: ${{ secrets.MACOS_INSTALLER_IDENTITY }}
+      run: |
+        ARCH="${{ matrix.target }}"
+        PKG_NAME="saorsa-cli-${ARCH}.pkg"
+        VERSION="${{ github.ref_name }}"
+
+        # Create package root structure
+        mkdir -p pkg-root/usr/local/bin
+        cp target/${ARCH}/release/sb pkg-root/usr/local/bin/
+        cp target/${ARCH}/release/sdisk pkg-root/usr/local/bin/
+        cp target/${ARCH}/release/saorsa pkg-root/usr/local/bin/
+
+        # Create component package
+        pkgbuild \
+          --root pkg-root \
+          --identifier com.saorsa-labs.saorsa-cli \
+          --version "${VERSION#v}" \
+          --install-location "/" \
+          saorsa-cli-component.pkg
+
+        # Create distribution XML for installer UI
+        cat > distribution.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <installer-gui-script minSpecVersion="2">
+            <title>Saorsa CLI</title>
+            <organization>com.saorsa-labs</organization>
+            <domains enable_localSystem="true"/>
+            <options customize="never" require-scripts="false" rootVolumeOnly="true"/>
+            <pkg-ref id="com.saorsa-labs.saorsa-cli"/>
+            <choices-outline>
+                <line choice="default">
+                    <line choice="com.saorsa-labs.saorsa-cli"/>
+                </line>
+            </choices-outline>
+            <choice id="default"/>
+            <choice id="com.saorsa-labs.saorsa-cli" visible="false">
+                <pkg-ref id="com.saorsa-labs.saorsa-cli"/>
+            </choice>
+            <pkg-ref id="com.saorsa-labs.saorsa-cli" onConclusion="none">saorsa-cli-component.pkg</pkg-ref>
+        </installer-gui-script>
+        EOF
+
+        # Create product archive (unsigned)
+        productbuild \
+          --distribution distribution.xml \
+          --package-path . \
+          unsigned-${PKG_NAME}
+
+        # Sign the PKG with Developer ID Installer certificate
+        productsign \
+          --sign "$MACOS_INSTALLER_IDENTITY" \
+          unsigned-${PKG_NAME} \
+          ${PKG_NAME}
+
+        # Verify PKG signature
+        pkgutil --check-signature ${PKG_NAME}
+
+        # Cleanup intermediate files
+        rm -rf pkg-root saorsa-cli-component.pkg distribution.xml unsigned-${PKG_NAME}
+
+        echo "Created signed PKG: ${PKG_NAME}"
+
     # Create ZIP for notarization (Apple requires ZIP format)
     - name: Create Notarization ZIP
       run: |
@@ -242,13 +307,35 @@ jobs:
           --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
           --wait
 
-    # Staple notarization ticket to binaries
-    - name: Staple Notarization Ticket
+    # Notarize the PKG installer (can be stapled, unlike loose binaries)
+    - name: Notarize PKG Installer
+      env:
+        MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.MACOS_NOTARIZATION_APPLE_ID }}
+        MACOS_NOTARIZATION_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_PASSWORD }}
+        MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
       run: |
-        # Note: stapler only works on .app bundles and .pkg/.dmg files
-        # For standalone binaries, the notarization is verified online by Gatekeeper
-        # The binaries are now notarized and will pass Gatekeeper checks
-        echo "Binaries have been notarized. Gatekeeper will verify them online."
+        PKG_NAME="saorsa-cli-${{ matrix.target }}.pkg"
+        echo "Submitting PKG for notarization..."
+        xcrun notarytool submit ${PKG_NAME} \
+          --apple-id "$MACOS_NOTARIZATION_APPLE_ID" \
+          --password "$MACOS_NOTARIZATION_PASSWORD" \
+          --team-id "$MACOS_NOTARIZATION_TEAM_ID" \
+          --wait
+
+        # Staple the notarization ticket to the PKG (works for .pkg files!)
+        echo "Stapling notarization ticket to PKG..."
+        xcrun stapler staple ${PKG_NAME}
+
+        # Verify stapling
+        xcrun stapler validate ${PKG_NAME}
+        echo "PKG notarized and stapled successfully!"
+
+    # Note about binary notarization
+    - name: Binary Notarization Note
+      run: |
+        # For standalone binaries in tar.gz, notarization is verified online by Gatekeeper
+        # The PKG installer is the recommended installation method (stapled, works offline)
+        echo "Binaries have been notarized. PKG installer has stapled ticket for offline verification."
 
     # Package signed binaries
     - name: Package Signed Binaries
@@ -265,11 +352,18 @@ jobs:
       run: |
         security delete-keychain $RUNNER_TEMP/signing.keychain-db || true
 
-    - name: Upload artifacts
+    - name: Upload tar.gz artifact
       uses: actions/upload-artifact@v4
       with:
         name: saorsa-cli-${{ matrix.target }}
         path: saorsa-cli-${{ matrix.target }}.tar.gz
+        retention-days: 7
+
+    - name: Upload PKG artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: saorsa-cli-${{ matrix.target }}-pkg
+        path: saorsa-cli-${{ matrix.target }}.pkg
         retention-days: 7
 
   # Create GitHub release with all artifacts
@@ -288,7 +382,7 @@ jobs:
     - name: Flatten artifacts
       run: |
         mkdir -p release-files
-        find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} release-files/ \;
+        find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.pkg" \) -exec mv {} release-files/ \;
         ls -la release-files/
 
     - name: Generate checksums
