@@ -30,17 +30,27 @@ do not yet have the full TUI installed.
 
 ## Quick Start
 
-### Install via script (recommended)
+### Install via signed script (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/saorsa-labs/saorsa-cli/main/scripts/install.sh | bash
+curl -fsSL https://github.com/saorsa-labs/saorsa-cli/releases/latest/download/saorsa-install.sh | bash
+```
+
+For a fully verified install, grab the detached signature and check it before piping to `bash`:
+
+```bash
+curl -fsSLO https://github.com/saorsa-labs/saorsa-cli/releases/latest/download/saorsa-install.sh
+curl -fsSLO https://github.com/saorsa-labs/saorsa-cli/releases/latest/download/saorsa-install.sh.asc
+gpg --import docs/signing/saorsa-public.asc
+gpg --verify saorsa-install.sh.asc saorsa-install.sh
+bash saorsa-install.sh
 ```
 
 What the script does:
 
-- Detects your OS/architecture and selects the correct release artifact
-- Downloads the signed tarball plus its `.asc` signature from GitHub Releases (latest by default)
-- Imports `docs/signing/saorsa-public.asc` (if not already present) and verifies the archive with GPG
+- Detects your OS/architecture and selects the correct **signed** release artifact
+- Downloads the tarball plus its `.asc` signature from GitHub Releases (latest tag by default)
+- Imports `docs/signing/saorsa-public.asc` (if not already present) and verifies both the install script and archive with GPG
 - Installs `saorsa`, `saorsa-cli`, `sb`, and `sdisk` into `/usr/local/bin` (or `~/.local/bin` if not writable)
 
 Advanced flags:

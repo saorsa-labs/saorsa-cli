@@ -12,6 +12,7 @@ focused on actionable engineering guidance and mirror the keyboard-first philoso
 - Enforce plugin integrity: manifests require a lowercase `sha256` hash of the compiled library and
   releases should be signed via GPG as documented in `docs/PLUGINS.md`.
 - Preserve the "world-class" Ratatui UX: low-latency drawing, tabbed layout, and the EdTUI editor for Markdown.
+- Ship releases via the signed `saorsa-install.sh` helper that lives on every GitHub Release; docs must show both the quick `curl | bash` path and the GPG-verification flow using `docs/signing/saorsa-public.asc`.
 
 ## Architecture Map
 
@@ -50,6 +51,7 @@ When adding new features, ensure **every** action has a reachable keybinding and
 ## Common Tasks
 
 - **Docs**: README + CLAUDE should stay aligned with the collapsed-front-end architecture and plugin warnings.
+- **Distribution**: Attach `saorsa-install.sh` + `.asc` signatures to every release, and update README instructions to reference `https://github.com/saorsa-labs/saorsa-cli/releases/latest/download/saorsa-install.sh`.
 - **Plugins**: use `saorsa_cli_core::PluginManager::load()`; manifests live next to `.so/.dylib/.dll` files, `entry_symbol` defaults to `_plugin_init`.
 - **Plugin integrity**: any plugin missing `sha256` will be rejected; update manifests during release
   packaging and follow the GPG instructions in `docs/PLUGINS.md` (secrets: `GPG_PRIVATE_KEY`,
