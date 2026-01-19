@@ -51,7 +51,7 @@ pub struct PluginManifest {
 }
 
 /// Context passed to plugins during execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PluginContext<'a> {
     pub message_bus: Option<&'a MessageBus>,
 }
@@ -60,12 +60,6 @@ impl<'a> PluginContext<'a> {
     #[must_use]
     pub fn new(message_bus: Option<&'a MessageBus>) -> Self {
         Self { message_bus }
-    }
-}
-
-impl Default for PluginContext<'_> {
-    fn default() -> Self {
-        Self { message_bus: None }
     }
 }
 
