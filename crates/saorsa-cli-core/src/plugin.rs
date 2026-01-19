@@ -409,19 +409,19 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn write_temp_file(contents: &[u8]) -> PathBuf {
+    fn write_temp_file(contents: &[u8]) -> NamedTempFile {
         let mut tmp = NamedTempFile::new().expect("temp file");
         tmp.write_all(contents).expect("write temp");
-        tmp.into_temp_path().to_path_buf()
+        tmp
     }
 
     #[test]
     fn compute_sha256_matches_known_value() {
-        let path = write_temp_file(b"saorsa");
-        let digest = compute_sha256(&path).expect("hash");
+        let temp = write_temp_file(b"saorsa");
+        let digest = compute_sha256(temp.path()).expect("hash");
         assert_eq!(
             hex::encode(digest),
-            "ebe4c8eea0d9c924166636608506cdc9e780d81a0cbe6cb94ad3cf59c18348eb"
+            "250cadc2d60147d940fd2b3a6e8ce4715501d060eac139073923c4dfb51b9bdb"
         );
     }
 
@@ -433,9 +433,10 @@ mod tests {
 
     #[test]
     fn verify_integrity_detects_mismatch() {
-        let mut manager = PluginManager::new();
+        let manager = PluginManager::new();
         let manifest_path = Path::new("manifest");
-        let library_path = write_temp_file(b"abc");
+        let library_file = write_temp_file(b"abc");
+        let library_path = library_file.path().to_path_buf();
         let manifest = PluginManifest {
             name: "demo".into(),
             version: "0.1.0".into(),

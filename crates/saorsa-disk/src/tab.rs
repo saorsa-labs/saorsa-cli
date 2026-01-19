@@ -315,7 +315,7 @@ impl Tab for DiskTab {
             disk_info: self.disk_info.clone(),
             largest_files: self.largest_files.clone(),
             stale_files: self.stale_files.clone(),
-            list_state: self.list_state.clone(),
+            list_state: self.list_state,
             stale_days: self.stale_days,
             focused: self.focused,
         };

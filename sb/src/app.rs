@@ -1,6 +1,8 @@
 use super::git::{FileStatus, GitRepository};
-use anyhow::{Context, Result};
+use crate::editor::MainEditor;
+use anyhow::{anyhow, Context, Result};
 use ratatui::prelude::*;
+use ratatui::text::Text as RichText;
 use std::io;
 use std::{
     collections::{HashMap, HashSet},
@@ -12,6 +14,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, TryRecvError},
         Arc, Mutex,
     },
     thread,
@@ -46,7 +49,6 @@ pub struct FileNode {
     pub is_dir: bool,
 }
 
-#[derive(Debug)]
 pub struct App {
     pub root: PathBuf,
     pub focus: Focus,
@@ -59,7 +61,7 @@ pub struct App {
     // Multi-selection for main file tree
     pub tree_selection: HashSet<String>, // Using file paths as keys
     pub tree_selection_anchor: Option<String>,
-    pub editor: TextArea<'static>,
+    pub editor: MainEditor,
     pub opened: Option<PathBuf>,
     pub last_saved_text: Option<String>,
     pub status: String,
@@ -106,6 +108,8 @@ pub struct App {
     // Git integration
     pub git_repo: Option<GitRepository>,
     pub git_status: HashMap<PathBuf, FileStatus>,
+    tree_loader: Option<Receiver<Result<Vec<TreeItem<'static, String>>>>>,
+    git_status_loader: Option<Receiver<Result<HashMap<PathBuf, FileStatus>>>>,
     // Move destination picker
     pub showing_move_dest: bool,
     pub move_dest_dir: PathBuf,
@@ -123,22 +127,39 @@ pub struct App {
 }
 
 impl App {
+    fn editor_lines(&self) -> Vec<String> {
+        self.editor.lines_vec()
+    }
+
+    fn editor_line_count(&self) -> usize {
+        self.editor.line_count()
+    }
+
+    fn set_editor_lines(&mut self, lines: Vec<String>) {
+        self.editor.set_lines_vec(lines);
+    }
+
+    fn editor_line(&self, idx: usize) -> Option<String> {
+        self.editor.line_at(idx)
+    }
+
     pub fn new(root: PathBuf) -> Result<Self> {
-        let left_tree = build_tree(&root)?;
-        let right_tree = build_tree(&root)?;
+        let left_tree = placeholder_tree(&root);
+        let right_tree = left_tree.clone();
+        let tree_loader = Some(spawn_tree_loader(root.clone()));
         let mut left_state = TreeState::<String>::default();
         let mut right_state = TreeState::<String>::default();
         left_state.select(vec![root.display().to_string()]);
         right_state.select(vec![root.display().to_string()]);
-        let mut editor = TextArea::default();
-        editor.set_placeholder_text("Select a file in the tree (Enter) …");
+        let editor = MainEditor::new();
         let mut filename_input = TextArea::default();
         filename_input.set_placeholder_text("new-note.md");
         let git_repo = GitRepository::open(&root).ok();
-        let git_status: HashMap<PathBuf, FileStatus> = if let Some(ref repo) = git_repo {
-            repo.status().unwrap_or_default()
+        let git_status: HashMap<PathBuf, FileStatus> = HashMap::new();
+        let git_status_loader = if git_repo.is_some() {
+            Some(spawn_git_status_loader(root.clone()))
         } else {
-            HashMap::new()
+            None
         };
 
         Ok(Self {
@@ -154,7 +175,7 @@ impl App {
             editor,
             opened: None,
             last_saved_text: None,
-            status: "Ready".into(),
+            status: "Loading workspace...".into(),
             show_help: false,
             show_left_pane: true,
             creating_file: false,
@@ -199,7 +220,56 @@ impl App {
             min_pane_width: 15,
             max_pane_width: 85,
             pane_resize_step: 5,
+            tree_loader,
+            git_status_loader,
         })
+    }
+
+    pub fn poll_background_tasks(&mut self) {
+        if let Some(rx) = self.tree_loader.as_ref() {
+            match rx.try_recv() {
+                Ok(Ok(tree)) => {
+                    let mirrored = tree.clone();
+                    self.left_tree = tree;
+                    self.right_tree = mirrored;
+                    self.status = "File tree synced".into();
+                    self.tree_loader = None;
+                }
+                Ok(Err(err)) => {
+                    self.status = format!("Tree load failed: {err}");
+                    self.tree_loader = None;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.status = "Tree loader disconnected".into();
+                    self.tree_loader = None;
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+
+        if let Some(rx) = self.git_status_loader.as_ref() {
+            match rx.try_recv() {
+                Ok(Ok(status_map)) => {
+                    let summary = if status_map.is_empty() {
+                        "Working tree clean".to_string()
+                    } else {
+                        format!("Tracked {} files", status_map.len())
+                    };
+                    self.git_status = status_map;
+                    self.git_status_text = summary;
+                    self.git_status_loader = None;
+                }
+                Ok(Err(err)) => {
+                    self.git_status_loader = None;
+                    self.git_status_text = format!("Git status unavailable: {err}");
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.git_status_loader = None;
+                    self.git_status_text = "Git status worker disconnected".into();
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+        }
     }
 
     pub fn open_selected(&mut self) -> Result<()> {
@@ -209,7 +279,7 @@ impl App {
             }
             let text =
                 fs::read_to_string(&path).with_context(|| format!("Reading {}", path.display()))?;
-            self.editor = TextArea::from(text.lines().map(|s| s.to_string()).collect::<Vec<_>>());
+            self.editor.set_text(&text);
             self.opened = Some(path);
             self.last_saved_text = Some(text);
             self.status = "File opened".into();
@@ -233,9 +303,9 @@ impl App {
 
     pub fn save(&mut self) -> Result<()> {
         if let Some(path) = &self.opened {
-            let text = self.editor.lines().join("\n");
+            let text = self.editor.text();
             fs::write(path, text).with_context(|| format!("Saving {}", path.display()))?;
-            self.last_saved_text = Some(self.editor.lines().join("\n"));
+            self.last_saved_text = Some(self.editor.text());
             self.status = "Saved".into();
         }
         Ok(())
@@ -371,7 +441,7 @@ impl App {
 
     #[allow(dead_code)]
     fn save_lines(&mut self, lines: Vec<String>) {
-        self.editor = TextArea::from(lines.clone());
+        self.set_editor_lines(lines.clone());
         if let Some(path) = &self.opened {
             let _ = std::fs::write(path, lines.join("\n"));
         }
@@ -379,10 +449,10 @@ impl App {
 
     #[allow(dead_code)]
     pub fn insert_char_preview(&mut self, ch: char) {
-        if self.preview_cursor >= self.editor.lines().len() {
+        if self.preview_cursor >= self.editor_line_count() {
             return;
         }
-        let mut lines = self.editor.lines().to_vec();
+        let mut lines = self.editor_lines();
         self.push_undo(&lines);
         let line = &mut lines[self.preview_cursor];
         let mut s = String::with_capacity(line.len() + 1);
@@ -403,10 +473,10 @@ impl App {
 
     #[allow(dead_code)]
     pub fn backspace_preview(&mut self) {
-        if self.preview_cursor >= self.editor.lines().len() {
+        if self.preview_cursor >= self.editor_line_count() {
             return;
         }
-        let mut lines = self.editor.lines().to_vec();
+        let mut lines = self.editor_lines();
         self.push_undo(&lines);
         let line = &mut lines[self.preview_cursor];
         if self.preview_col == 0 {
@@ -433,7 +503,7 @@ impl App {
 
     #[allow(dead_code)]
     pub fn insert_newline_preview(&mut self) {
-        let mut lines = self.editor.lines().to_vec();
+        let mut lines = self.editor_lines();
         self.push_undo(&lines);
         let line = &mut lines[self.preview_cursor];
         let mut split_idx = 0usize;
@@ -454,7 +524,7 @@ impl App {
 
     #[allow(dead_code)]
     pub fn insert_newline_above_preview(&mut self) {
-        let mut lines = self.editor.lines().to_vec();
+        let mut lines = self.editor_lines();
         self.push_undo(&lines);
         let idx = self.preview_cursor;
         lines.insert(idx, String::new());
@@ -526,7 +596,7 @@ impl App {
         );
         fs::write(&new_path, &initial)?;
         self.opened = Some(new_path.clone());
-        self.editor = TextArea::from(initial.lines().map(|s| s.to_string()).collect::<Vec<_>>());
+        self.editor.set_text(&initial);
         self.last_saved_text = Some(initial);
         self.creating_file = false;
         self.refresh_tree()?;
@@ -572,7 +642,7 @@ impl App {
             }
             if self.opened.as_ref().map(|p| p == &path).unwrap_or(false) {
                 self.opened = None;
-                self.editor = TextArea::default();
+                self.editor.set_text("");
             }
             self.refresh_tree()?;
             self.status = format!("Deleted {}", path.display());
@@ -1489,15 +1559,10 @@ impl App {
     // --- Inline editing in Preview ----------------------------------------
     #[allow(dead_code)]
     pub fn begin_line_edit(&mut self) {
-        if self.preview_cursor >= self.editor.lines().len() {
+        if self.preview_cursor >= self.editor_line_count() {
             return;
         }
-        let current = self
-            .editor
-            .lines()
-            .get(self.preview_cursor)
-            .cloned()
-            .unwrap_or_default();
+        let current = self.editor_line(self.preview_cursor).unwrap_or_default();
         self.line_input = TextArea::default();
         self.line_input.insert_str(&current);
         self.preview_col = current.chars().count();
@@ -1509,12 +1574,12 @@ impl App {
     }
 
     pub fn confirm_line_edit(&mut self) {
-        if self.preview_cursor < self.editor.lines().len() {
+        if self.preview_cursor < self.editor_line_count() {
             let new_line = self.line_input.lines().join("");
             // Replace the specific line in the editor buffer
-            let mut lines = self.editor.lines().to_vec();
+            let mut lines = self.editor_lines();
             lines[self.preview_cursor] = new_line.clone();
-            self.editor = TextArea::from(lines.clone());
+            self.set_editor_lines(lines.clone());
             // Immediate save if file open
             if let Some(path) = &self.opened {
                 let text = lines.join("\n");
@@ -1540,7 +1605,7 @@ impl App {
     }
 
     pub fn move_cursor_down(&mut self) {
-        if self.preview_cursor + 1 < self.editor.lines().len() {
+        if self.preview_cursor + 1 < self.editor_line_count() {
             self.preview_cursor += 1;
         }
         let vp = self.preview_viewport.max(1);
@@ -1555,7 +1620,7 @@ impl App {
     // Line operations (simple)
     #[allow(dead_code)]
     pub fn delete_current_line(&mut self) {
-        let mut lines = self.editor.lines().to_vec();
+        let mut lines = self.editor_lines();
         if self.preview_cursor < lines.len() {
             lines.remove(self.preview_cursor);
             if self.preview_cursor >= lines.len() && self.preview_cursor > 0 {
@@ -1573,13 +1638,13 @@ impl App {
     }
     #[allow(dead_code)]
     pub fn move_col_to_end(&mut self) {
-        if let Some(line) = self.editor.lines().get(self.preview_cursor) {
+        if let Some(line) = self.editor_line(self.preview_cursor) {
             self.preview_col = line.chars().count();
         }
     }
     #[allow(dead_code)]
     pub fn move_word_forward(&mut self) {
-        if let Some(line) = self.editor.lines().get(self.preview_cursor) {
+        if let Some(line) = self.editor_line(self.preview_cursor) {
             let cs: Vec<char> = line.chars().collect();
             let len = cs.len();
             let mut i = self.preview_col.min(len);
@@ -1604,7 +1669,7 @@ impl App {
     }
     #[allow(dead_code)]
     pub fn move_word_back(&mut self) {
-        if let Some(line) = self.editor.lines().get(self.preview_cursor) {
+        if let Some(line) = self.editor_line(self.preview_cursor) {
             let cs: Vec<char> = line.chars().collect();
             let len = cs.len();
             if self.preview_col == 0 {
@@ -1629,8 +1694,14 @@ impl App {
         }
     }
 
+    pub fn move_col_left(&mut self) {
+        if self.preview_col > 0 {
+            self.preview_col -= 1;
+        }
+    }
+
     pub fn move_col_right(&mut self) {
-        if let Some(line) = self.editor.lines().get(self.preview_cursor) {
+        if let Some(line) = self.editor_line(self.preview_cursor) {
             let len = line.chars().count();
             if self.preview_col < len {
                 self.preview_col += 1;
@@ -1639,10 +1710,10 @@ impl App {
     }
     #[allow(dead_code)]
     pub fn delete_char_under(&mut self) {
-        if self.preview_cursor >= self.editor.lines().len() {
+        if self.preview_cursor >= self.editor_line_count() {
             return;
         }
-        let mut lines = self.editor.lines().to_vec();
+        let mut lines = self.editor_lines();
         let line_len = lines[self.preview_cursor].chars().count();
         if self.preview_col >= line_len {
             return;
@@ -1673,7 +1744,7 @@ impl App {
     #[allow(dead_code)]
     pub fn undo(&mut self) {
         if let Some(prev) = self.undo_stack.pop() {
-            let current = self.editor.lines().to_vec();
+            let current = self.editor_lines();
             self.redo_stack.push(current);
             self.save_lines(prev);
         }
@@ -1681,7 +1752,7 @@ impl App {
     #[allow(dead_code)]
     pub fn redo(&mut self) {
         if let Some(next) = self.redo_stack.pop() {
-            let current = self.editor.lines().to_vec();
+            let current = self.editor_lines();
             self.undo_stack.push(current);
             self.save_lines(next);
         }
@@ -1715,6 +1786,17 @@ impl App {
         if let Some(vp) = &self.video_player {
             vp.toggle_pause();
         }
+    }
+
+    /// Pause video playback (called when tab loses focus)
+    pub fn pause_video(&mut self) {
+        // Stop video when losing focus to avoid background playback
+        self.stop_video();
+    }
+
+    /// Check if the app wants to quit
+    pub fn wants_quit(&self) -> bool {
+        false // Quit is handled by parent application
     }
 }
 
@@ -1819,6 +1901,43 @@ impl VideoPlayer {
     }
 }
 
+impl Drop for VideoPlayer {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn placeholder_tree(root: &Path) -> Vec<TreeItem<'static, String>> {
+    let display_name = root
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| root.display().to_string());
+    let text = RichText::from(ratatui::text::Line::from(format!(
+        "{display_name} (loading tree...)"
+    )));
+    vec![TreeItem::new_leaf(root.display().to_string(), text)]
+}
+
+fn spawn_tree_loader(root: PathBuf) -> Receiver<Result<Vec<TreeItem<'static, String>>>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = build_tree(&root);
+        let _ = tx.send(result);
+    });
+    rx
+}
+
+fn spawn_git_status_loader(root: PathBuf) -> Receiver<Result<HashMap<PathBuf, FileStatus>>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = GitRepository::open(&root)
+            .map_err(|e| anyhow!(e))
+            .and_then(|repo| repo.status().map_err(|e| anyhow!(e)));
+        let _ = tx.send(result);
+    });
+    rx
+}
+
 // --- Tree helpers -----------------------------------------------------------
 
 /// Fast tree building that reuses existing tree structure and only updates text
@@ -1852,6 +1971,7 @@ fn build_tree_with_selection_cached(
         } else {
             Line::from(path_str.to_string())
         };
+        let text = RichText::from(new_text.clone());
 
         // Recursively update children
         let updated_children: Vec<TreeItem<'static, String>> = item
@@ -1862,10 +1982,10 @@ fn build_tree_with_selection_cached(
 
         // Create new TreeItem with updated text and children
         if path.is_dir() && !updated_children.is_empty() {
-            TreeItem::new(path_str.to_string(), new_text.clone(), updated_children)
-                .unwrap_or_else(|_| TreeItem::new_leaf(path_str.to_string(), new_text))
+            TreeItem::new(path_str.to_string(), text.clone(), updated_children)
+                .unwrap_or_else(|_| TreeItem::new_leaf(path_str.to_string(), text.clone()))
         } else {
-            TreeItem::new_leaf(path_str.to_string(), new_text)
+            TreeItem::new_leaf(path_str.to_string(), text)
         }
     }
 
@@ -1892,7 +2012,7 @@ fn build_tree(root: &Path) -> Result<Vec<TreeItem<'static, String>>> {
                     build_node(&p)
                 } else {
                     let text = Line::from(e.file_name().to_string_lossy().to_string());
-                    TreeItem::new_leaf(p.display().to_string(), text)
+                    TreeItem::new_leaf(p.display().to_string(), RichText::from(text))
                 }
             })
             .collect();
@@ -1902,6 +2022,7 @@ fn build_tree(root: &Path) -> Result<Vec<TreeItem<'static, String>>> {
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| dir.display().to_string()),
         );
+        let text = RichText::from(text);
         TreeItem::new(dir.display().to_string(), text.clone(), children)
             .unwrap_or_else(|_| TreeItem::new_leaf(dir.display().to_string(), text))
     }
@@ -1937,7 +2058,7 @@ fn build_tree_with_selection(
                     } else {
                         Line::from(filename)
                     };
-                    TreeItem::new_leaf(path_str, text)
+                    TreeItem::new_leaf(path_str, RichText::from(text))
                 }
             })
             .collect();
@@ -1949,7 +2070,7 @@ fn build_tree_with_selection(
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| dir.display().to_string());
 
-        let text = if selection.contains(&path_str) {
+        let text_line = if selection.contains(&path_str) {
             // Add checkmark for selected directories
             Line::from(vec![
                 "✓ ".fg(Color::Green).bold(),
@@ -1959,7 +2080,7 @@ fn build_tree_with_selection(
         } else {
             Line::from(vec!["📁 ".fg(Color::Blue), dir_name.into()])
         };
-
+        let text = RichText::from(text_line);
         TreeItem::new(path_str.clone(), text.clone(), children)
             .unwrap_or_else(|_| TreeItem::new_leaf(path_str, text))
     }

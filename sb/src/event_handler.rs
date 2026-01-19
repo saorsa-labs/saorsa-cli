@@ -5,6 +5,36 @@
 //! and more maintainable.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::path::PathBuf;
+use tui_textarea::{Input as TextInput, Key as TextKey};
+
+fn to_textarea_input(key_event: KeyEvent) -> TextInput {
+    let key = match key_event.code {
+        KeyCode::Char(c) => TextKey::Char(c),
+        KeyCode::Backspace => TextKey::Backspace,
+        KeyCode::Enter => TextKey::Enter,
+        KeyCode::Left => TextKey::Left,
+        KeyCode::Right => TextKey::Right,
+        KeyCode::Up => TextKey::Up,
+        KeyCode::Down => TextKey::Down,
+        KeyCode::Tab => TextKey::Tab,
+        KeyCode::Delete => TextKey::Delete,
+        KeyCode::Home => TextKey::Home,
+        KeyCode::End => TextKey::End,
+        KeyCode::PageUp => TextKey::PageUp,
+        KeyCode::PageDown => TextKey::PageDown,
+        KeyCode::Esc => TextKey::Esc,
+        KeyCode::F(n) => TextKey::F(n),
+        _ => TextKey::Null,
+    };
+
+    TextInput {
+        key,
+        ctrl: key_event.modifiers.contains(KeyModifiers::CONTROL),
+        alt: key_event.modifiers.contains(KeyModifiers::ALT),
+        shift: key_event.modifiers.contains(KeyModifiers::SHIFT),
+    }
+}
 
 use crate::app::{App, Focus, OpMode};
 
@@ -104,7 +134,7 @@ fn handle_file_creation(app: &mut App, key_event: KeyEvent) -> Option<()> {
             app.cancel_create_file();
         }
         _ => {
-            let _ = app.filename_input.input(key_event);
+            let _ = app.filename_input.input(to_textarea_input(key_event));
         }
     }
     Some(())
@@ -224,7 +254,7 @@ fn handle_operation(app: &mut App, key_event: KeyEvent) -> Option<()> {
             let _ = app.confirm_op();
         }
         _ => {
-            let _ = app.op_input.input(key_event);
+            let _ = app.op_input.input(to_textarea_input(key_event));
         }
     }
     Some(())
@@ -238,7 +268,7 @@ fn handle_line_edit(app: &mut App, key_event: KeyEvent) -> Option<()> {
         }
         (KeyCode::Esc, _) => app.cancel_line_edit(),
         _ => {
-            let _ = app.line_input.input(key_event);
+            let _ = app.line_input.input(to_textarea_input(key_event));
         }
     }
     Some(())
@@ -252,7 +282,7 @@ fn handle_editor_command(app: &mut App, key_event: KeyEvent) -> Option<()> {
             let _ = app.confirm_editor_cmd();
         }
         _ => {
-            let _ = app.editor_cmd_input.input(key_event);
+            let _ = app.editor_cmd_input.input(to_textarea_input(key_event));
         }
     }
     Some(())
@@ -264,22 +294,21 @@ fn handle_raw_editor(app: &mut App, key_event: KeyEvent) -> Option<()> {
         (KeyCode::Esc, _) => {
             app.show_raw_editor = false;
             app.prefer_raw_editor = false;
-            return Some(());
+            app.focus = Focus::Preview;
         }
         (KeyCode::Tab, _) => {
-            // Exit raw editor and switch focus
+            // Exit raw editor but handle Tab like in normal mode
             app.show_raw_editor = false;
-            app.prefer_raw_editor = false;
-            app.focus = Focus::Left;
-            return Some(());
+            app.prefer_raw_editor = true;
+            return handle_normal_mode(app, key_event);
         }
         _ => {
             if !app.editor_cmd_mode {
-                app.editor.input(key_event);
+                app.editor.handle_key_event(key_event);
             }
-            return Some(());
         }
     }
+    Some(())
 }
 
 /// Handle help screen mode events
@@ -337,6 +366,62 @@ fn handle_normal_mode(app: &mut App, key_event: KeyEvent) -> Option<()> {
             } else {
                 let _ = app.open_externally();
             }
+        }
+
+        // Video controls (avoid overriding tree selection bindings)
+        (KeyCode::Char(' '), _) if !matches!(app.focus, Focus::Left) => {
+            app.toggle_pause_video();
+        }
+        (KeyCode::Char('s'), _) if !matches!(app.focus, Focus::Left) => {
+            app.stop_video();
+        }
+        (KeyCode::Char('v'), KeyModifiers::CONTROL) => {
+            app.autoplay_video = !app.autoplay_video;
+            app.status = format!(
+                "Autoplay video {}",
+                if app.autoplay_video { "on" } else { "off" }
+            );
+        }
+
+        // Pane controls
+        (KeyCode::Char('b'), KeyModifiers::CONTROL) | (KeyCode::F(9), _) => {
+            app.toggle_left_pane();
+        }
+        (KeyCode::Char(','), modifiers) | (KeyCode::Char('-'), modifiers)
+            if modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            app.decrease_left_pane_width();
+        }
+        (KeyCode::Char('.'), modifiers) | (KeyCode::Char('='), modifiers)
+            if modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            app.increase_left_pane_width();
+        }
+
+        // Function keys (Midnight Commander style)
+        (KeyCode::F(2), _) => {
+            let _ = app.begin_file_picker();
+        }
+        (KeyCode::F(4), _) => {
+            app.focus = Focus::Editor;
+            if app.prefer_raw_editor {
+                app.show_raw_editor = true;
+            }
+        }
+        (KeyCode::F(5), _) => {
+            app.begin_copy();
+        }
+        (KeyCode::F(6), _) => {
+            app.begin_move();
+        }
+        (KeyCode::F(7), _) => {
+            app.begin_mkdir();
+        }
+        (KeyCode::F(8), _) => {
+            app.begin_delete();
+        }
+        (KeyCode::F(10), _) => {
+            return None;
         }
 
         // Context-specific commands
@@ -421,6 +506,12 @@ fn handle_focus_specific(app: &mut App, key_event: KeyEvent) {
 /// Handle key events when left pane has focus
 fn handle_left_pane_keys(app: &mut App, key_event: KeyEvent) {
     match (key_event.code, key_event.modifiers) {
+        (KeyCode::Up, modifiers) if modifiers.contains(KeyModifiers::SHIFT) => {
+            app.tree_up_with_selection();
+        }
+        (KeyCode::Down, modifiers) if modifiers.contains(KeyModifiers::SHIFT) => {
+            app.tree_down_with_selection();
+        }
         (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
             let _ = app.left_state.key_up();
         }
@@ -451,7 +542,7 @@ fn handle_left_pane_keys(app: &mut App, key_event: KeyEvent) {
             }
         }
         (KeyCode::Enter, _) => {
-            let _ = app.open_selected();
+            let _ = app.activate_on_tree();
         }
         (KeyCode::Char('r'), _) => {
             let _ = app.refresh_tree();
@@ -466,6 +557,9 @@ fn handle_left_pane_keys(app: &mut App, key_event: KeyEvent) {
         }
         (KeyCode::Char('n'), _) => app.begin_create_file(),
         (KeyCode::Char('d'), _) => app.begin_delete(),
+        (KeyCode::Char('a'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+            app.tree_select_all();
+        }
         (KeyCode::F(5), _) => app.begin_copy(),
         (KeyCode::F(6), _) => app.begin_move(),
         (KeyCode::F(7), _) => app.begin_create_file(),
@@ -484,7 +578,7 @@ fn handle_editor_keys(app: &mut App, key_event: KeyEvent) {
         }
         _ => {
             // Default editor input handling
-            app.editor.input(key_event);
+            app.editor.handle_key_event(key_event);
         }
     }
 }
@@ -495,7 +589,13 @@ fn handle_preview_keys(app: &mut App, key_event: KeyEvent) {
         (KeyCode::Up, _) | (KeyCode::Char('k'), _) => app.move_cursor_up(),
         (KeyCode::Down, _) | (KeyCode::Char('j'), _) => app.move_cursor_down(),
         (KeyCode::Char('i'), _) => app.begin_line_edit(),
-        (KeyCode::Char('e'), _) => app.begin_line_edit(),
+        (KeyCode::Char('e'), _) => {
+            app.focus = Focus::Editor;
+            app.show_raw_editor = true;
+            app.prefer_raw_editor = true;
+            app.editor.set_cursor(app.preview_cursor, app.preview_col);
+        }
+        (KeyCode::Char('h'), _) => app.toggle_left_pane(),
         (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
             // Switch to raw editor mode
             app.focus = Focus::Editor;
@@ -512,6 +612,8 @@ fn handle_preview_keys(app: &mut App, key_event: KeyEvent) {
                 app.move_cursor_down();
             }
         }
+        (KeyCode::Left, _) => app.move_col_left(),
+        (KeyCode::Right, _) => app.move_col_right(),
         _ => {}
     }
 }
@@ -558,5 +660,26 @@ mod tests {
         assert_eq!(app.show_help, false);
         handle_key_event(&mut app, key_event);
         assert_eq!(app.show_help, true);
+    }
+
+    #[test]
+    fn test_preview_e_enters_raw_editor() {
+        let mut app = App::new(PathBuf::from(".")).unwrap();
+        app.focus = Focus::Preview;
+        let key_event = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE);
+        handle_key_event(&mut app, key_event);
+        assert!(app.show_raw_editor);
+        assert!(matches!(app.focus, Focus::Editor));
+    }
+
+    #[test]
+    fn test_raw_editor_tab_falls_back_to_normal() {
+        let mut app = App::new(PathBuf::from(".")).unwrap();
+        app.focus = Focus::Editor;
+        app.show_raw_editor = true;
+        let key_event = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let result = handle_key_event(&mut app, key_event);
+        assert!(result.is_some());
+        assert!(!app.show_raw_editor);
     }
 }

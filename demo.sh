@@ -35,6 +35,6 @@ echo "To run the interactive menu, use:"
 echo "  ./target/debug/saorsa"
 echo
 echo "To run tools directly:"
-echo "  ./target/debug/saorsa --run sb [args]"
-echo "  ./target/debug/saorsa --run sdisk [args]"
+echo "  ./target/debug/saorsa-cli --run sb [args]"
+echo "  ./target/debug/saorsa-cli --run sdisk [args]"
 echo "===================================="

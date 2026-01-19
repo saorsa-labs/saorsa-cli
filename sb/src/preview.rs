@@ -2,7 +2,7 @@ use anyhow::Result;
 use image::ImageReader;
 use once_cell::sync::Lazy;
 use pathdiff::diff_paths;
-use ratatui::{prelude::*, widgets::*};
+use ratatui::{prelude::*, text::Text, widgets::*};
 use ratatui_image::{picker::Picker, Resize, StatefulImage};
 use similar::{ChangeTag, TextDiff};
 use std::path::{Path, PathBuf};
@@ -352,7 +352,7 @@ pub fn render_preview(f: &mut Frame, area: Rect, preview: &Preview) {
     for path in preview.images.iter() {
         if let Ok(reader) = ImageReader::open(path) {
             if let Ok(img) = reader.decode() {
-                let picker = Picker::from_fontsize((8, 12));
+                let picker = Picker::halfblocks();
                 let mut state = picker.new_resize_protocol(img);
                 let widget = StatefulImage::new().resize(Resize::Fit(None));
                 f.render_stateful_widget(widget, chunks[idx], &mut state);

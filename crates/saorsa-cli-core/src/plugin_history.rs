@@ -83,10 +83,7 @@ impl PluginHistory {
         success: bool,
         message: Option<String>,
     ) -> io::Result<()> {
-        let stats = self
-            .records
-            .entry(plugin_name.to_string())
-            .or_default();
+        let stats = self.records.entry(plugin_name.to_string()).or_default();
         if success {
             stats.successes += 1;
         } else {
@@ -107,8 +104,7 @@ impl PluginHistory {
             fs::create_dir_all(parent)?;
         }
 
-        let data =
-            serde_json::to_string_pretty(&self.records).map_err(io::Error::other)?;
+        let data = serde_json::to_string_pretty(&self.records).map_err(io::Error::other)?;
         fs::write(path, data)
     }
 }

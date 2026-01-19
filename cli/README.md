@@ -1,10 +1,13 @@
-# Saorsa CLI
+# Saorsa CLI (Bootstrapper)
 
-An interactive menu system for Saorsa tools with automatic binary management.
+`saorsa-cli` is the lightweight bootstrapper and downloader for the Saorsa ecosystem. It
+detects your platform, fetches first-party binaries, and presents an interactive menu with
+“Launch Saorsa” as the primary action so you can get into the full TUI workspace quickly.
 
 ## Features
 
-- **Interactive Menu**: Terminal UI for selecting between `sb` (Saorsa Browser) and `sdisk` tools
+- **Launch Saorsa**: One-keystroke option to install/launch the unified Saorsa TUI
+- **Interactive Menu**: Terminal UI for launching `sb`, `sdisk`, or managing settings when the full TUI isn't available yet
 - **Automatic Downloads**: Automatically downloads binaries from GitHub releases
 - **Platform Detection**: Detects OS and architecture to download appropriate binaries
 - **Binary Caching**: Caches downloaded binaries for faster subsequent launches
@@ -18,7 +21,7 @@ Build from source:
 cargo build --release --package cli
 ```
 
-The binary will be available at `target/release/saorsa`.
+The binary will be available at `target/release/saorsa-cli`.
 
 ## Usage
 
@@ -26,10 +29,11 @@ The binary will be available at `target/release/saorsa`.
 
 Run without arguments to launch the interactive menu:
 ```bash
-saorsa
+saorsa-cli
 ```
 
 Menu options:
+- **Launch Saorsa**: Install (if needed) and start the full TUI workspace
 - **Run Saorsa Browser (sb)**: Launch the markdown browser/editor
 - **Run Saorsa Disk (sdisk)**: Launch the disk cleanup utility
 - **Update Binaries**: Download latest versions of tools
@@ -43,13 +47,16 @@ Navigation:
 
 ### Direct Run Mode
 
-Run a specific tool directly:
+Run a specific tool directly (helpful for CI or scripting):
 ```bash
 # Run sb (Saorsa Browser)
-saorsa --run sb [args...]
+saorsa-cli --run sb [args...]
 
 # Run sdisk
-saorsa --run sdisk [args...]
+saorsa-cli --run sdisk [args...]
+
+# Once Saorsa is installed, run it directly:
+saorsa
 ```
 
 ### Command-Line Options
@@ -106,7 +113,7 @@ cargo build --release
 # The binaries will be at:
 # - target/release/sb
 # - target/release/sdisk
-# - target/release/saorsa
+# - target/release/saorsa-cli
 ```
 
 ## License

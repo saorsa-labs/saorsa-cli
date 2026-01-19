@@ -205,6 +205,17 @@ impl PluginsTab {
     fn clear_info_panel(&mut self) {
         self.info_panel = None;
     }
+
+    fn draw_info_panel(&self, frame: &mut Frame, area: Rect, panel: &InfoPanel) {
+        let block = Block::default()
+            .title(panel.title())
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow));
+        let paragraph = Paragraph::new(panel.content())
+            .wrap(Wrap { trim: true })
+            .block(block);
+        frame.render_widget(paragraph, area);
+    }
 }
 
 impl Tab for PluginsTab {
@@ -260,7 +271,7 @@ impl Tab for PluginsTab {
                 .collect()
         };
 
-        let mut state = self.state.clone();
+        let mut state = self.state;
         if plugins.is_empty() {
             state.select(None);
         }
@@ -301,17 +312,6 @@ impl Tab for PluginsTab {
             chunks[1]
         };
         frame.render_widget(status, status_area);
-    }
-
-    fn draw_info_panel(&self, frame: &mut Frame, area: Rect, panel: &InfoPanel) {
-        let block = Block::default()
-            .title(panel.title())
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow));
-        let paragraph = Paragraph::new(panel.content())
-            .wrap(Wrap { trim: true })
-            .block(block);
-        frame.render_widget(paragraph, area);
     }
 
     fn handle_message(&mut self, message: &Message) -> Option<Message> {
