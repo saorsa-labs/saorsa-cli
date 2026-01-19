@@ -1,0 +1,26 @@
+[package]
+name = "saorsa"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Unified TUI workstation combining file browser, disk analyzer, and more"
+
+[[bin]]
+name = "saorsa"
+path = "src/main.rs"
+
+[dependencies]
+saorsa-cli-core = { path = "../saorsa-cli-core" }
+saorsa-ui = { path = "../saorsa-ui" }
+saorsa-sb = { path = "../saorsa-sb" }
+saorsa-disk = { path = "../saorsa-disk" }
+saorsa-git = { path = "../saorsa-git" }
+
+ratatui = "0.30"
+crossterm = "0.29"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+color-eyre = "0.6"
+parking_lot = "0.12"

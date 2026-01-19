@@ -1,0 +1,20 @@
+[package]
+name = "saorsa-git"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Git integration for saorsa TUI framework"
+
+[dependencies]
+saorsa-cli-core = { path = "../saorsa-cli-core" }
+git2 = "0.20"
+ratatui = "0.30"
+crossterm = "0.29"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile = "3"

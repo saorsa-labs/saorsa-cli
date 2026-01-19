@@ -1,0 +1,22 @@
+[package]
+name = "saorsa-sb"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Markdown browser tab for saorsa TUI"
+
+[dependencies]
+saorsa-cli-core = { path = "../saorsa-cli-core" }
+sb = { path = "../../sb" }
+parking_lot = "0.12"
+ratatui = "0.30"
+tui-tree-widget = "0.24"
+crossterm = "0.29"
+anyhow = "1.0"
+thiserror = "2"
+tui-textarea = { version = "0.7", features = ["ratatui", "crossterm"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,18 @@
+[package]
+name = "saorsa-ui"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "UI framework and tab manager for saorsa TUI"
+
+[dependencies]
+saorsa-cli-core = { path = "../saorsa-cli-core" }
+ratatui = "0.30"
+crossterm = "0.29"
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+proptest = "1.4"

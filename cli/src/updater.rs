@@ -6,8 +6,7 @@
 use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::version;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 /// Result of an update check.
 #[allow(dead_code)] // Used in Task 2 integration
@@ -44,10 +43,10 @@ impl UpdateChecker {
     ///
     /// Returns cached result if within TTL, otherwise performs a fresh check.
     /// Returns `None` if update checking is disabled or check fails.
-    pub async fn check(&self) -> Option<UpdateCheckResult> {
+    pub fn check(&self) -> Option<UpdateCheckResult> {
         // Check if we should even run (respects --no-update-check and cache)
         {
-            let config = self.config.read().await;
+            let config = self.config.read().ok()?;
             if !config.should_check_for_updates() {
                 // Return cached result if available
                 if let Some(latest) = config.get_latest_version() {
@@ -70,21 +69,20 @@ impl UpdateChecker {
         }
 
         // Perform the actual check
-        self.perform_check().await
+        self.perform_check()
     }
 
     /// Actually perform the update check (bypasses cache).
-    async fn perform_check(&self) -> Option<UpdateCheckResult> {
+    fn perform_check(&self) -> Option<UpdateCheckResult> {
         let current = env!("CARGO_PKG_VERSION");
 
-        match self.downloader.get_latest_release().await {
+        match self.downloader.get_latest_release() {
             Ok(release) => {
                 let latest = release.tag_name.trim_start_matches('v');
                 let update_available = version::update_available(current, latest).unwrap_or(false);
 
                 // Update cache
-                {
-                    let mut config = self.config.write().await;
+                if let Ok(mut config) = self.config.write() {
                     config.record_update_check(Some(latest.to_string()));
                     // Save config (ignore errors for background task)
                     if let Err(e) = config.save() {

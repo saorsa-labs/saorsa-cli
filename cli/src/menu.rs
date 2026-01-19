@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MenuChoice {
+    RunSaorsa,
     RunSB,
     RunSDisk,
     UpdateBinaries,
@@ -29,6 +30,7 @@ pub enum MenuChoice {
 pub struct Menu {
     state: ListState,
     items: Vec<(String, MenuChoice)>,
+    saorsa_path: Option<PathBuf>,
     sb_path: Option<PathBuf>,
     sdisk_path: Option<PathBuf>,
     update_available: Option<String>,
@@ -42,6 +44,7 @@ impl Menu {
         let mut menu = Self {
             state,
             items: Vec::new(),
+            saorsa_path: None,
             sb_path: None,
             sdisk_path: None,
             update_available: None,
@@ -59,6 +62,10 @@ impl Menu {
     /// Rebuild menu items based on current state.
     fn rebuild_items(&mut self) {
         self.items = vec![
+            (
+                "🚀 Launch Saorsa (full TUI)".to_string(),
+                MenuChoice::RunSaorsa,
+            ),
             ("📚 Run Saorsa Browser (sb)".to_string(), MenuChoice::RunSB),
             (
                 "💾 Run Saorsa Disk (sdisk)".to_string(),
@@ -82,12 +89,18 @@ impl Menu {
         ]);
     }
 
-    pub fn set_binary_paths(&mut self, sb_path: Option<PathBuf>, sdisk_path: Option<PathBuf>) {
+    pub fn set_binary_paths(
+        &mut self,
+        saorsa_path: Option<PathBuf>,
+        sb_path: Option<PathBuf>,
+        sdisk_path: Option<PathBuf>,
+    ) {
+        self.saorsa_path = saorsa_path;
         self.sb_path = sb_path;
         self.sdisk_path = sdisk_path;
     }
 
-    pub async fn run(&mut self) -> Result<MenuChoice> {
+    pub fn run(&mut self) -> Result<MenuChoice> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
@@ -95,7 +108,7 @@ impl Menu {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
-        let result = self.run_loop(&mut terminal).await;
+        let result = self.run_loop(&mut terminal);
 
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -104,12 +117,14 @@ impl Menu {
         result
     }
 
-    async fn run_loop<B: ratatui::backend::Backend>(
+    fn run_loop<B: ratatui::backend::Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
     ) -> Result<MenuChoice> {
         loop {
-            terminal.draw(|f| self.draw(f))?;
+            terminal
+                .draw(|f| self.draw(f))
+                .map_err(|e| anyhow!(e.to_string()))?;
 
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
@@ -192,6 +207,13 @@ impl Menu {
 
                 // Add status indicators
                 match choice {
+                    MenuChoice::RunSaorsa => {
+                        if self.saorsa_path.is_none() {
+                            style = style.fg(Color::Yellow);
+                        } else {
+                            style = style.fg(Color::Green);
+                        }
+                    }
                     MenuChoice::RunSB => {
                         if self.sb_path.is_none() {
                             style = style.fg(Color::DarkGray);

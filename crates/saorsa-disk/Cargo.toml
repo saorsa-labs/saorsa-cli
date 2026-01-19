@@ -1,0 +1,21 @@
+[package]
+name = "saorsa-disk"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Disk analyzer tab for saorsa TUI"
+
+[dependencies]
+saorsa-cli-core = { path = "../saorsa-cli-core" }
+ratatui = "0.30"
+crossterm = "0.29"
+walkdir = "2"
+humansize = "2"
+sysinfo = "0.33"
+chrono = "0.4"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
