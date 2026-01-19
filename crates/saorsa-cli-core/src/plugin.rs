@@ -11,6 +11,9 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+mod builtin_plugins;
+use builtin_plugins::builtin_plugins;
+
 /// Default filename expected inside a plugin directory.
 pub const MANIFEST_NAME: &str = "saorsa-plugin.toml";
 
@@ -79,7 +82,25 @@ type PluginInit = unsafe extern "C" fn() -> *mut dyn Plugin;
 struct LoadedPlugin {
     descriptor: PluginDescriptor,
     instance: Box<dyn Plugin>,
-    _library: Library,
+    _library: Option<Library>,
+}
+
+impl LoadedPlugin {
+    fn dynamic(descriptor: PluginDescriptor, instance: Box<dyn Plugin>, library: Library) -> Self {
+        Self {
+            descriptor,
+            instance,
+            _library: Some(library),
+        }
+    }
+
+    fn builtin(descriptor: PluginDescriptor, instance: Box<dyn Plugin>) -> Self {
+        Self {
+            descriptor,
+            instance,
+            _library: None,
+        }
+    }
 }
 
 /// Manages discovery and execution of Saorsa plugins.
@@ -146,6 +167,8 @@ impl PluginManager {
             }
         }
 
+        loaded += self.register_builtin_plugins();
+
         Ok(loaded)
     }
 
@@ -197,6 +220,20 @@ impl PluginManager {
             }
         }
         Ok(count)
+    }
+
+    fn register_builtin_plugins(&mut self) -> usize {
+        let mut count = 0;
+        for (descriptor, instance) in builtin_plugins() {
+            let name = descriptor.metadata.name.clone();
+            if self.plugins.contains_key(&name) {
+                continue;
+            }
+            self.plugins
+                .insert(name, LoadedPlugin::builtin(descriptor, instance));
+            count += 1;
+        }
+        count
     }
 
     fn load_manifest(&mut self, manifest_path: &Path) -> CoreResult<()> {
@@ -262,11 +299,7 @@ impl PluginManager {
 
             self.plugins.insert(
                 metadata.name.clone(),
-                LoadedPlugin {
-                    descriptor,
-                    instance: boxed,
-                    _library: library,
-                },
+                LoadedPlugin::dynamic(descriptor, boxed, library),
             );
         }
 

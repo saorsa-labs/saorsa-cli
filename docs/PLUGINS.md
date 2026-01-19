@@ -145,3 +145,12 @@ the published archives and the hash in git always match.
 
 With the checksum + GPG approach in place, we can safely treat GitHub releases
 from this monorepo as the single source of truth for first-party plugins.
+
+## Built-in Wrappers
+
+For convenience, Saorsa ships two trusted plugins—`fd` and `rg`—directly inside
+`saorsa-cli-core`. These wrappers display in the plugin menus just like dynamic
+plugins but simply invoke the system `fd`/`rg` binaries. Keep those tools
+installed (or ship them alongside your release artifacts) to ensure the built-in
+plugins continue to work. All other plugins continue to load from the search
+paths described above.

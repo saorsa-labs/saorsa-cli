@@ -17,6 +17,7 @@ use crate::updater::{UpdateCheckResult, UpdateChecker};
 use anyhow::{Context, Result};
 use chrono::Local;
 use clap::Parser;
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use saorsa_cli_core::{
     PluginContext, PluginDescriptor, PluginHistory, PluginManager, PluginRunStats,
 };
@@ -25,8 +26,6 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Instant;
 use tracing_subscriber::EnvFilter;
-
-// Dialoguer is already imported in the functions where needed
 
 #[derive(Parser, Debug)]
 #[command(
@@ -716,7 +715,6 @@ fn show_plugin_directories(plugin_manager: &PluginManager) -> Result<()> {
 
 fn show_plugins_menu(plugin_manager: &mut PluginManager) -> Result<()> {
     use chrono::{DateTime, Utc};
-    use dialoguer::{theme::ColorfulTheme, Input, Select};
 
     fn stats_summary(stats: Option<&PluginRunStats>) -> String {
         match stats {
@@ -808,19 +806,20 @@ fn show_plugins_menu(plugin_manager: &mut PluginManager) -> Result<()> {
                 );
                 println!("⚠️  Press Ctrl+C to abort if this plugin looks suspicious.\n");
 
-                // Get arguments for the plugin
-                let args_input: String = Input::with_theme(&ColorfulTheme::default())
-                    .with_prompt("Enter arguments (or leave empty)")
-                    .allow_empty(true)
-                    .interact_text()?;
-
-                let args: Vec<String> = if args_input.trim().is_empty() {
-                    vec![]
-                } else {
-                    args_input
-                        .split_whitespace()
-                        .map(|s| s.to_string())
-                        .collect()
+                let args = match plugin_name.as_str() {
+                    "fd" => prompt_fd_args()?,
+                    "rg" => prompt_rg_args()?,
+                    _ => {
+                        let raw: String = Input::with_theme(&ColorfulTheme::default())
+                            .with_prompt("Enter arguments (or leave empty)")
+                            .allow_empty(true)
+                            .interact_text()?;
+                        if raw.trim().is_empty() {
+                            vec![]
+                        } else {
+                            raw.split_whitespace().map(|s| s.to_string()).collect()
+                        }
+                    }
                 };
 
                 println!("\n🚀 Executing {} with args: {:?}", plugin_name, args);
@@ -897,5 +896,143 @@ fn show_plugins_menu(plugin_manager: &mut PluginManager) -> Result<()> {
 
             _ => unreachable!(),
         }
+    }
+}
+
+fn prompt_fd_args() -> Result<Vec<String>> {
+    let theme = ColorfulTheme::default();
+    let pattern: String = Input::with_theme(&theme)
+        .with_prompt("Pattern (leave blank to match everything)")
+        .allow_empty(true)
+        .interact_text()?;
+    let search_root: String = Input::with_theme(&theme)
+        .with_prompt("Search path")
+        .default(".".to_string())
+        .interact_text()?;
+    let include_hidden = Confirm::with_theme(&theme)
+        .with_prompt("Include hidden files/directories?")
+        .default(false)
+        .interact()?;
+    let respect_ignore = Confirm::with_theme(&theme)
+        .with_prompt("Respect .gitignore/.ignore files?")
+        .default(true)
+        .interact()?;
+    let extension: String = Input::with_theme(&theme)
+        .with_prompt("Filter by extension (leave blank for any)")
+        .allow_empty(true)
+        .interact_text()?;
+    let type_selection = Select::with_theme(&theme)
+        .with_prompt("Entry type")
+        .items(&["All entries", "Files only", "Directories only"])
+        .default(0)
+        .interact()?;
+    let extra_flags: String = Input::with_theme(&theme)
+        .with_prompt("Additional fd flags (optional)")
+        .allow_empty(true)
+        .interact_text()?;
+
+    let mut args = Vec::new();
+    if !pattern.trim().is_empty() {
+        args.push(pattern.trim().to_string());
+    }
+    if !search_root.trim().is_empty() {
+        args.push(search_root.trim().to_string());
+    }
+    if include_hidden {
+        args.push("--hidden".into());
+    }
+    if !respect_ignore {
+        args.push("--no-ignore".into());
+    }
+    if !extension.trim().is_empty() {
+        args.push("--extension".into());
+        args.push(extension.trim().to_string());
+    }
+    match type_selection {
+        1 => {
+            args.push("--type".into());
+            args.push("file".into());
+        }
+        2 => {
+            args.push("--type".into());
+            args.push("directory".into());
+        }
+        _ => {}
+    }
+
+    append_extra_flags(&mut args, &extra_flags);
+    Ok(args)
+}
+
+fn prompt_rg_args() -> Result<Vec<String>> {
+    let theme = ColorfulTheme::default();
+    let pattern = loop {
+        let value: String = Input::with_theme(&theme)
+            .with_prompt("Pattern (required)")
+            .allow_empty(false)
+            .interact_text()?;
+        if value.trim().is_empty() {
+            println!("Pattern cannot be empty for ripgrep. Please try again.");
+        } else {
+            break value;
+        }
+    };
+    let search_root: String = Input::with_theme(&theme)
+        .with_prompt("Search path")
+        .default(".".to_string())
+        .interact_text()?;
+    let include_hidden = Confirm::with_theme(&theme)
+        .with_prompt("Include hidden files?")
+        .default(false)
+        .interact()?;
+    let respect_ignore = Confirm::with_theme(&theme)
+        .with_prompt("Respect .gitignore/.ignore files?")
+        .default(true)
+        .interact()?;
+    let ignore_case = Confirm::with_theme(&theme)
+        .with_prompt("Case insensitive search?")
+        .default(false)
+        .interact()?;
+    let multiline = Confirm::with_theme(&theme)
+        .with_prompt("Enable multiline mode?")
+        .default(false)
+        .interact()?;
+    let context_lines: String = Input::with_theme(&theme)
+        .with_prompt("Context lines (number, blank for default)")
+        .allow_empty(true)
+        .interact_text()?;
+    let extra_flags: String = Input::with_theme(&theme)
+        .with_prompt("Additional ripgrep flags (optional)")
+        .allow_empty(true)
+        .interact_text()?;
+
+    let mut args = vec![pattern.trim().to_string()];
+    if !search_root.trim().is_empty() {
+        args.push(search_root.trim().to_string());
+    }
+    if include_hidden {
+        args.push("--hidden".into());
+    }
+    if !respect_ignore {
+        args.push("--no-ignore".into());
+    }
+    if ignore_case {
+        args.push("--ignore-case".into());
+    }
+    if multiline {
+        args.push("--multiline".into());
+    }
+    if let Ok(value) = context_lines.trim().parse::<u32>() {
+        args.push("-C".into());
+        args.push(value.to_string());
+    }
+
+    append_extra_flags(&mut args, &extra_flags);
+    Ok(args)
+}
+
+fn append_extra_flags(args: &mut Vec<String>, extra: &str) {
+    for token in extra.split_whitespace() {
+        args.push(token.to_string());
     }
 }

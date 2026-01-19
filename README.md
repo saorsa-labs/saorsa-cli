@@ -122,6 +122,15 @@ Saorsa loads manifests named `saorsa-plugin.toml` from:
 
 See `docs/PLUGINS.md` for manifest format, Rust skeleton, and troubleshooting tips. Plugins currently run unsandboxed with the same privileges as `saorsa`, so only install trusted code.
 
+### Built-in search plugins
+
+Saorsa now bundles two trusted plugins that wrap community-favorite tools:
+
+- **fd** – fast file discovery powered by `fd` / `fd-find`
+- **rg** – full-text search via `ripgrep`
+
+Both appear automatically in the CLI plugin menu and the Saorsa Plugins tab. The CLI provides an interactive argument builder (pattern, search path, hidden files, filters, extra flags) so you can run common queries without memorizing every flag. Under the hood these plugins simply shell out to `fd`/`rg`, so make sure those binaries are installed on your `PATH` before running them (see the fd/ripgrep releases or your package manager).
+
 ### Plugin Security
 
 - Every manifest must include a lowercase `sha256` checksum of its shared library. The loader re-hashes the binary at runtime and aborts on mismatches.
