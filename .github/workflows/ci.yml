@@ -22,9 +22,6 @@ jobs:
     name: Test
     runs-on: ${{ matrix.os }}
     env:
-      # Isolate cargo/rustup to temp so self-hosted/act don't touch user installs
-      CARGO_HOME: ${{ runner.temp }}/cargo
-      RUSTUP_HOME: ${{ runner.temp }}/rustup
       RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
     strategy:
       matrix:
@@ -43,8 +40,8 @@ jobs:
       uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
       with:
         path: |
-          ${{ env.CARGO_HOME }}/registry
-          ${{ env.CARGO_HOME }}/git
+          ~/.cargo/registry
+          ~/.cargo/git
           target
         key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('**/Cargo.lock') }}
     
@@ -67,8 +64,6 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     env:
-      CARGO_HOME: ${{ runner.temp }}/cargo
-      RUSTUP_HOME: ${{ runner.temp }}/rustup
       RUSTUP_TOOLCHAIN: stable
     strategy:
       matrix:
