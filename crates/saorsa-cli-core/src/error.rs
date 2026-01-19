@@ -55,7 +55,8 @@ pub enum CoreError {
     #[error("invalid plugin manifest at {path:?}: {source}")]
     PluginManifest {
         path: PathBuf,
-        source: ManifestError,
+        #[source]
+        source: Box<ManifestError>,
     },
 
     /// Referenced plugin library file is missing.

@@ -204,7 +204,7 @@ impl PluginManager {
         let manifest: PluginManifest =
             toml::from_str(&data).map_err(|err| crate::CoreError::PluginManifest {
                 path: manifest_path.to_path_buf(),
-                source: err,
+                source: Box::new(err),
             })?;
 
         let base_dir = manifest_path
