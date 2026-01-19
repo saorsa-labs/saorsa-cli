@@ -35,7 +35,7 @@ pub struct SelfUpdateResult {
 }
 
 /// Download and install update for the CLI itself.
-pub async fn perform_self_update(
+pub fn perform_self_update(
     downloader: &Downloader,
     platform: &Platform,
 ) -> Result<SelfUpdateResult, SelfUpdateError> {
@@ -44,8 +44,7 @@ pub async fn perform_self_update(
     // Download new binary to cache
     println!("Downloading update...");
     let new_binary = downloader
-        .download_binary("saorsa", platform, true)
-        .await
+        .download_binary("saorsa-cli", platform, true)
         .map_err(SelfUpdateError::Download)?;
 
     // Create backup path

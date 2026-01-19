@@ -1,3 +1,5 @@
+#[cfg(not(unix))]
+use anyhow::Context;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,6 +12,8 @@ pub enum RunnerError {
     #[allow(dead_code)]
     #[error("Failed to execute binary: {0}")]
     NonZeroExit(i32),
+    #[error("Failed to exec binary: {0}")]
+    ExecFailed(#[source] std::io::Error),
 }
 
 pub struct BinaryRunner;
@@ -29,11 +33,8 @@ impl BinaryRunner {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            let _ = Command::new(binary_path).args(args).exec();
-            // This part is tricky because exec replaces the current process.
-            // We might not get here if exec is successful.
-            // Consider using a different approach if you need to get the status.
-            Ok(())
+            let err = Command::new(binary_path).args(args).exec();
+            return Err(RunnerError::ExecFailed(err).into());
         }
 
         #[cfg(not(unix))]
@@ -52,7 +53,12 @@ impl BinaryRunner {
                     }
                 }
             }
+
+            return Ok(());
         }
+
+        #[allow(unreachable_code)]
+        Ok(())
     }
 
     pub fn check_binary_exists(&self, binary_path: &Path) -> bool {

@@ -71,10 +71,11 @@ impl Platform {
         }
     }
 
-    pub fn asset_name(&self, binary: &str) -> String {
+    /// Returns the name of the release archive that bundles every Saorsa binary
+    /// for this platform.
+    pub fn archive_name(&self) -> String {
         format!(
-            "{}-{}{}",
-            binary,
+            "saorsa-cli-{}{}",
             self.target_triple(),
             self.archive_extension()
         )
@@ -92,20 +93,23 @@ mod tests {
     }
 
     #[test]
-    fn test_asset_names() {
+    fn test_archive_names() {
         let platform = Platform {
             os: OS::Macos,
             arch: Arch::Aarch64,
         };
-        assert_eq!(platform.asset_name("sb"), "sb-aarch64-apple-darwin.tar.gz");
+        assert_eq!(
+            platform.archive_name(),
+            "saorsa-cli-aarch64-apple-darwin.tar.gz"
+        );
 
         let platform = Platform {
             os: OS::Windows,
             arch: Arch::X86_64,
         };
         assert_eq!(
-            platform.asset_name("sdisk"),
-            "sdisk-x86_64-pc-windows-msvc.zip"
+            platform.archive_name(),
+            "saorsa-cli-x86_64-pc-windows-msvc.zip"
         );
     }
 }

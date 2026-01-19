@@ -141,7 +141,7 @@ jobs:
       if: matrix.os != 'windows-latest'
       run: |
         cd target/${{ matrix.target }}/release
-        tar czf ../../../saorsa-cli-${{ matrix.target }}.tar.gz sb sdisk saorsa
+        tar czf ../../../saorsa-cli-${{ matrix.target }}.tar.gz saorsa saorsa-cli sb sdisk
         cd ../../..
 
     - name: Package binaries (Windows)
@@ -149,7 +149,7 @@ jobs:
       shell: pwsh
       run: |
         cd target/${{ matrix.target }}/release
-        7z a ../../../saorsa-cli-${{ matrix.target }}.zip sb.exe sdisk.exe saorsa.exe
+        7z a ../../../saorsa-cli-${{ matrix.target }}.zip saorsa.exe saorsa-cli.exe sb.exe sdisk.exe
         cd ../../..
 
     - name: Upload artifacts
@@ -215,7 +215,7 @@ jobs:
       env:
         MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
       run: |
-        BINARIES="sb sdisk saorsa"
+        BINARIES="saorsa saorsa-cli sb sdisk"
         for binary in $BINARIES; do
           echo "Signing $binary..."
           codesign --force --options runtime --timestamp \
@@ -241,6 +241,7 @@ jobs:
         cp target/${ARCH}/release/sb pkg-root/usr/local/bin/
         cp target/${ARCH}/release/sdisk pkg-root/usr/local/bin/
         cp target/${ARCH}/release/saorsa pkg-root/usr/local/bin/
+        cp target/${ARCH}/release/saorsa-cli pkg-root/usr/local/bin/
 
         # Create component package
         pkgbuild \
@@ -297,7 +298,7 @@ jobs:
       if: ${{ env.MACOS_NOTARIZATION_APPLE_ID != '' }}
       run: |
         cd target/${{ matrix.target }}/release
-        zip ../../../saorsa-cli-${{ matrix.target }}-notarize.zip sb sdisk saorsa
+        zip ../../../saorsa-cli-${{ matrix.target }}-notarize.zip saorsa saorsa-cli sb sdisk
         cd ../../..
 
     # Submit for notarization
@@ -351,7 +352,7 @@ jobs:
     - name: Package Signed Binaries
       run: |
         cd target/${{ matrix.target }}/release
-        tar czf ../../../saorsa-cli-${{ matrix.target }}.tar.gz sb sdisk saorsa
+        tar czf ../../../saorsa-cli-${{ matrix.target }}.tar.gz saorsa saorsa-cli sb sdisk
         cd ../../..
         # Clean up notarization zip
         rm -f saorsa-cli-${{ matrix.target }}-notarize.zip
@@ -395,6 +396,10 @@ jobs:
         mkdir -p release-files
         find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.pkg" \) -exec mv {} release-files/ \;
         ls -la release-files/
+
+    - name: Add install script
+      run: |
+        cp scripts/install.sh release-files/saorsa-install.sh
 
     - name: Import Saorsa release key
       env:

@@ -1,241 +1,164 @@
-# Saorsa CLI Tools
+# Saorsa
 
-A collection of powerful command-line tools for developers and system administrators.
+Saorsa is a world-class terminal workspace built on Ratatui 0.30 and EdTUI 0.11. It unifies
+Markdown knowledge work, disk insights, Git telemetry, and trusted plugins inside a single binary,
+while `saorsa-cli` handles bootstrap downloads, updates, and standalone execution on systems that
+do not yet have the full TUI installed.
 
-## 🛠️ Available Tools
+## Workspace Components
 
-### saorsa - Interactive CLI Menu
-An interactive menu system for all Saorsa tools with automatic binary management.
+| Binary / Crate | Path | Role | Highlights |
+| --- | --- | --- | --- |
+| `saorsa` | `crates/saorsa` | Unified tabbed TUI | Files (sb), Disk, Git, Plugins tabs share one compositor + status bar |
+| `saorsa-cli` | `cli` | Bootstrapper/downloader | Ratatui menu for installs, updates, plugin launcher, self-update |
+| `sb` | `sb` | Headless Markdown browser/editor | Uses EdTUI 0.11, git-aware file tree, media preview, reusable as Saorsa tab |
+| `sdisk` | `sdisk` | Disk usage analyzer | Streaming walkers plus Saorsa tab via `saorsa-disk` |
+| `saorsa-ui` | `crates/saorsa-ui` | UI toolkit | Component layout, theming, tab + status widgets |
+| `saorsa-cli-core` | `crates/saorsa-cli-core` | Core runtime | Message bus, plugin loader, history ledger |
+| `saorsa-sb` / `saorsa-disk` / `saorsa-git` | `crates/*` | Tab adapters | Bridge the standalone tools into the unified app |
 
-**Features:**
-- 📱 Interactive terminal UI menu
-- 🔄 Automatic binary downloads from GitHub releases
-- 🖥️ Platform detection (macOS, Linux, Windows)
-- 📦 Binary caching and version management
-- ⚡ Direct tool execution mode
+## UX Pillars
 
-**Usage:**
+- **Modern Ratatui patterns** - Layout + event handling follow the 0.30 component architecture
+  (stateful tabs, `Message` bus) so redraws stay sub-5 ms even with multiple panes.
+- **EdTUI editing** - The Markdown editor is powered by EdTUI 0.11 (vim mode, syntax highlighting,
+  mouse support) for world-class text ergonomics.
+- **Consistent chrome** - `saorsa-ui` supplies a shared tab bar + status bar, so Files/Disk/Git/Plugins
+  all expose the same help hints and focus semantics.
+- **Plugin-aware from the start** - Both the bootstrapper and the TUI share `PluginManager`, run
+  history, and on-screen trust warnings. First-party plugins live in `~/.saorsa/plugins`.
+
+## Quick Start
+
+### Install via script (recommended)
+
 ```bash
-# Interactive menu
-saorsa
-
-# Run tool directly
-saorsa --run sb
-saorsa --run sdisk
+curl -fsSL https://raw.githubusercontent.com/saorsa-labs/saorsa-cli/main/scripts/install.sh | bash
 ```
 
-### sb - Terminal Markdown Browser/Editor
-A terminal-based Markdown browser and editor with Git integration, syntax highlighting, and media support.
+What the script does:
 
-**Features:**
-- 📝 Browse and edit Markdown files in the terminal
-- 🎨 Syntax highlighting for code blocks
-- 🖼️ Image and video preview support
-- 🔄 Git integration with diff view
-- ⌨️ Vim-like keybindings
-- 🌲 File tree navigation
+- Detects your OS/architecture and selects the correct release artifact
+- Downloads the signed tarball plus its `.asc` signature from GitHub Releases (latest by default)
+- Imports `docs/signing/saorsa-public.asc` (if not already present) and verifies the archive with GPG
+- Installs `saorsa`, `saorsa-cli`, `sb`, and `sdisk` into `/usr/local/bin` (or `~/.local/bin` if not writable)
 
-**Installation:**
+Advanced flags:
+
+- `SAORSA_VERSION=v0.4.0` pins to a specific tag.
+- `SAORSA_TARGET=x86_64-unknown-linux-musl` overrides the detected target triple.
+- `SAORSA_PREFIX=$HOME/bin` installs into a custom directory.
+
+### Install prebuilt binaries manually
+
+1. Download the latest release artifacts from GitHub.
+2. Put `saorsa` and/or `saorsa-cli` somewhere on your `$PATH`.
+3. Launch `saorsa-cli` once - it will download missing tools into the cache (or use system binaries if configured).
+
+### Build everything from source
+
 ```bash
-cargo install sb
-```
-
-**Usage:**
-```bash
-# Browse current directory
-sb
-
-# Browse specific directory
-sb /path/to/notes
-
-# Open specific file
-sb README.md
-```
-
-### sdisk - Disk Usage Analyzer
-Cross-platform CLI tool to analyze disk usage and suggest safe cleanups.
-
-**Features:**
-- 📊 Analyze disk space usage
-- 🧹 Identify safe files to clean
-- 🔍 Find large files and directories
-- 🗑️ Smart cleanup suggestions
-- 📈 Progress indicators
-- 🖥️ Cross-platform support
-
-**Installation:**
-```bash
-cargo install sdisk
-```
-
-**Usage:**
-```bash
-# Analyze current directory
-sdisk
-
-# Analyze specific directory
-sdisk /path/to/analyze
-
-# Interactive cleanup mode
-sdisk --interactive
-```
-
-## 🚀 Installation
-
-### Quick Install (Recommended)
-Download the latest release from [GitHub Releases](https://github.com/dirvine/saorsa-cli/releases):
-
-1. Download the `cli-<platform>` archive for your system
-2. Extract and run `saorsa` (or `saorsa.exe` on Windows)
-3. The menu will automatically download other tools as needed
-
-### Install All Tools from Source
-```bash
-# Clone the repository
 git clone https://github.com/dirvine/saorsa-cli
 cd saorsa-cli
-
-# Build and install all tools
-cargo install --path sb
-cargo install --path sdisk
-cargo install --path cli
+cargo build --release          # builds the workspace (saorsa + tabs + headless binaries)
 ```
 
-### Install from crates.io
-Each tool is also available individually on crates.io:
+Binaries appear under `target/release/` (`saorsa`, `saorsa-cli`, `sb`, `sdisk`).
+
+### Run it
 
 ```bash
-cargo install sb
-cargo install sdisk
+saorsa-cli              # bootstrap menu (downloads + updates + plugin runner)
+saorsa                  # full TUI once installed
+saorsa-cli --run sb     # invoke headless sb directly
+saorsa-cli --run sdisk  # invoke sdisk directly
 ```
 
-## 🔧 Building from Source
+All binaries accept `-h/--help` for additional flags.
 
-### Prerequisites
-- Rust 1.70 or later
-- Git
+## Keyboard-first Menus
 
-### Build Commands
-```bash
-# Clone the repository
-git clone https://github.com/dirvine/saorsa-cli
-cd saorsa-cli
+### Bootstrapper (`saorsa-cli`)
 
-# Build all tools
-cargo build --release
+- `↑/↓` or `j/k` navigate
+- `Enter` or `Space` activate highlighted action
+- `q` / `Esc` returns to the shell
+- Plugins menu mirrors CLI functionality (execute, details, refresh, directory listing)
 
-# Build specific tool
-cargo build --release -p sb
-cargo build --release -p sdisk
-cargo build --release -p cli
+### Saorsa TUI
 
-# Run tests
-cargo test --all
+- `Ctrl+Q` or `Ctrl+C` quits from anywhere
+- `Tab` / `Shift+Tab` cycle tabs, `Alt+1..9` jumps directly
+- Global status hints live in the footer (`?:help  q:quit`)
+- Each tab adds mode-specific bindings (press `?` inside the Files tab to see the sb keymap)
 
-# Run with cargo
-cargo run --bin sb
-cargo run --bin sdisk
-cargo run --bin saorsa
-```
+**Files (sb) tab** - Dual-pane browser + EdTUI editor. `?` shows in-app cheat sheet, `:` enters command mode,
+`r` toggles raw editor, `Space` multi-selects.
 
-## 📦 Project Structure
+**Disk tab** - Arrow keys move between sections, `Enter` drills down, `Backspace` goes up.
+
+**Git tab** - Navigate staged/unstaged lists with arrows, `Space` toggles selection, `c` creates commit drafts.
+
+**Plugins tab** - `↑/↓` select, `Enter` runs, `r` reloads search paths, `h/?` shows plugin help, `i` shows metadata + run stats, `d` lists directories, `c`/`Esc` closes info panels. A status footer reminds users that plugins run with full trust.
+
+## Plugins
+
+Saorsa loads manifests named `saorsa-plugin.toml` from:
+
+- `~/.saorsa/plugins`
+- `${XDG_DATA_HOME:-~/.local/share}/saorsa/plugins`
+- `/usr/local/share/saorsa/plugins`
+- `./plugins` (handy while developing)
+
+See `docs/PLUGINS.md` for manifest format, Rust skeleton, and troubleshooting tips. Plugins currently run unsandboxed with the same privileges as `saorsa`, so only install trusted code.
+
+### Plugin Security
+
+- Every manifest must include a lowercase `sha256` checksum of its shared library. The loader re-hashes the binary at runtime and aborts on mismatches.
+- First-party releases are built from this monorepo and published on GitHub with both the manifest hash and an optional GPG detached signature. The instructions for generating hashes, signing artifacts, and uploading `.asc` signatures live in `docs/PLUGINS.md`.
+- The public verification key is checked into `docs/signing/saorsa-public.asc`; import it before verifying signatures.
+- If you side-load a plugin, ensure you audit the manifest + source and update the hash yourself—unsigned plugins are rejected by default.
+
+## Production Readiness Checklist
+
+- `cargo fmt --all` - formatting gate
+- `cargo clippy --all-targets --all-features -- -D warnings` - lint with panic/unwrap forbid rules
+- `cargo test --all` - workspace tests (including sb + sdisk)
+- `cargo run --bin saorsa` - manual smoke test of every tab + plugin menu
+- `./scripts/create-release.sh vX.Y.Z` - release helper (tags + assets)
+- Verify plugin directories (especially `./plugins`) before cutting a release; the runtime does not sandbox dynamic libraries.
+
+## Project Layout
 
 ```
 saorsa-cli/
-├── Cargo.toml          # Workspace configuration
-├── README.md           # This file
-├── .github/
-│   └── workflows/
-│       ├── ci.yml      # Continuous Integration
-│       └── release.yml # Release automation
-├── cli/                # Interactive CLI Menu
-│   ├── Cargo.toml
-│   ├── src/
-│   └── README.md
-├── sb/                 # Terminal Markdown Browser/Editor
-│   ├── Cargo.toml
-│   ├── src/
-│   └── README.md
-├── sdisk/              # Disk Usage Analyzer
-│   ├── Cargo.toml
-│   ├── src/
-│   └── README.md
-└── scripts/
-    └── create-release.sh # Release helper script
+├── Cargo.toml
+├── cli/                     # saorsa-cli bootstrapper
+├── crates/
+│   ├── saorsa               # unified TUI main binary
+│   ├── saorsa-cli-core      # plugin manager, message bus, theme
+│   ├── saorsa-ui            # reusable UI primitives
+│   ├── saorsa-sb            # Files tab adapter
+│   ├── saorsa-disk          # Disk tab adapter
+│   └── saorsa-git           # Git tab adapter
+├── sb/                      # standalone Markdown app reused inside Saorsa
+├── sdisk/                   # standalone disk analyzer reused inside Saorsa
+├── docs/PLUGINS.md          # plugin authoring guide
+├── scripts/create-release.sh
+└── README.md
 ```
 
-## 🤝 Contributing
+## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+1. Fork + clone the repo
+2. Create a feature branch (`git checkout -b feat/my-change`)
+3. Make changes, run fmt/clippy/tests
+4. Open a PR with screenshots/GIFs for UI tweaks and describe plugin/API changes
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+## License
 
-## 📝 License
+Dual-licensed under MIT or Apache 2.0.
 
-This project is dual-licensed under:
-- MIT License
-- Apache License 2.0
+## Maintainer
 
-You may choose either license for your use.
-
-## 👤 Author
-
-**David Irvine**
-- GitHub: [@dirvine](https://github.com/dirvine)
-- Email: david.irvine@saorsa.net
-
-## 🌟 Acknowledgments
-
-- Built with Rust 🦀
-- Uses the amazing Ratatui TUI framework
-- Powered by the Saorsa ecosystem
-
-## 📚 More Information
-
-For detailed documentation on each tool, see their respective README files:
-- [CLI Menu README](./cli/README.md)
-- [sb README](./sb/README.md)
-- [sdisk README](./sdisk/README.md)
-
-## 🚢 Releases
-
-### Creating a Release
-
-1. **Update version numbers** in `Cargo.toml` files
-2. **Run the release script**:
-   ```bash
-   ./scripts/create-release.sh v0.1.0
-   ```
-3. **Push the tag** to trigger GitHub Actions:
-   ```bash
-   git push origin v0.1.0
-   ```
-
-GitHub Actions will automatically:
-- Build binaries for all platforms
-- Create individual and combined archives
-- Generate SHA256 checksums
-- Create a GitHub release with all assets
-
-### Supported Platforms
-
-Releases include pre-built binaries for:
-- **macOS**: Apple Silicon (M1/M2) and Intel
-- **Linux**: x86_64 and ARM64
-- **Windows**: x86_64
-
-## 🔮 Future Tools
-
-This repository will continue to grow with more CLI tools. Stay tuned for:
-- Network utilities
-- Development helpers
-- System monitoring tools
-- And more!
-
----
-
-*Part of the Saorsa ecosystem - Building tools for a better development experience*
+David Irvine - david.irvine@saorsa.net (@dirvine)

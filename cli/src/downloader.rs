@@ -1,15 +1,13 @@
 use anyhow::{Context, Result};
-use futures::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
-use reqwest::Client;
+use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-use tokio::io::AsyncWriteExt;
 
 use crate::platform::Platform;
 
@@ -53,6 +51,8 @@ pub struct Downloader {
     cache_dir: PathBuf,
 }
 
+const BUNDLED_BINARIES: &[&str] = &["saorsa", "saorsa-cli", "sb", "sdisk"];
+
 impl Downloader {
     pub fn new(repo_owner: String, repo_name: String) -> Result<Self> {
         let cache_dir = dirs::cache_dir()
@@ -75,13 +75,13 @@ impl Downloader {
         })
     }
 
-    pub async fn get_latest_release(&self) -> Result<GitHubRelease, DownloadError> {
+    pub fn get_latest_release(&self) -> Result<GitHubRelease, DownloadError> {
         let url = format!(
             "https://api.github.com/repos/{}/{}/releases/latest",
             self.repo_owner, self.repo_name
         );
 
-        let response = self.client.get(&url).send().await?;
+        let response = self.client.get(&url).send()?;
 
         if !response.status().is_success() {
             // Try to get all releases if latest doesn't exist
@@ -90,11 +90,11 @@ impl Downloader {
                 self.repo_owner, self.repo_name
             );
 
-            let releases: Vec<GitHubRelease> = self.client.get(&url).send().await?.json().await?;
+            let releases: Vec<GitHubRelease> = self.client.get(&url).send()?.json()?;
 
             releases.into_iter().next().ok_or(DownloadError::NoReleases)
         } else {
-            Ok(response.json().await?)
+            Ok(response.json()?)
         }
     }
 
@@ -103,7 +103,7 @@ impl Downloader {
             .join(format!("{}{}", binary_name, platform.binary_extension()))
     }
 
-    pub async fn download_binary(
+    pub fn download_binary(
         &self,
         binary_name: &str,
         platform: &Platform,
@@ -118,14 +118,13 @@ impl Downloader {
 
         let release = self
             .get_latest_release()
-            .await
             .context("Failed to get latest release")?;
 
-        let asset_name = platform.asset_name(binary_name);
+        let archive_name = platform.archive_name();
         let asset = release
             .assets
             .iter()
-            .find(|a| a.name == asset_name)
+            .find(|a| a.name == archive_name)
             .ok_or(DownloadError::NoMatchingAsset)?;
 
         tracing::info!(
@@ -136,11 +135,10 @@ impl Downloader {
 
         let archive_path = self
             .download_asset(asset)
-            .await
             .context("Failed to download asset")?;
 
         // Verify checksum if available
-        match self.fetch_checksums(&release).await {
+        match self.fetch_checksums(&release) {
             Ok(checksums) => {
                 if let Some(expected) = checksums.get(&asset.name) {
                     Self::verify_checksum(&archive_path, expected)
@@ -158,33 +156,26 @@ impl Downloader {
             }
         }
 
-        self.extract_binary(&archive_path, binary_name, platform)
-            .await
-            .context("Failed to extract binary")?;
+        self.extract_bundle(&archive_path, platform)
+            .context("Failed to extract Saorsa bundle")?;
 
         // Clean up archive
         fs::remove_file(&archive_path).ok();
 
-        // Set executable permissions on Unix
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&binary_path)?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&binary_path, perms)?;
+        if !binary_path.exists() {
+            anyhow::bail!("Binary {} not found after extraction", binary_name);
         }
 
         Ok(binary_path)
     }
 
-    async fn download_asset(&self, asset: &GitHubAsset) -> Result<PathBuf> {
+    fn download_asset(&self, asset: &GitHubAsset) -> Result<PathBuf> {
         let archive_path = self.cache_dir.join(&asset.name);
 
         let response = self
             .client
             .get(&asset.browser_download_url)
             .send()
-            .await
             .context("Failed to start download")?;
 
         let total_size = response.content_length().unwrap_or(asset.size);
@@ -196,19 +187,22 @@ impl Downloader {
                 .progress_chars("#>-"),
         );
 
-        let mut file = tokio::fs::File::create(&archive_path)
-            .await
-            .context("Failed to create archive file")?;
+        let mut file = File::create(&archive_path).context("Failed to create archive file")?;
 
         let mut downloaded = 0u64;
-        let mut stream = response.bytes_stream();
+        let mut response = response;
+        let mut buffer = [0u8; 8192];
 
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.context("Failed to download chunk")?;
-            file.write_all(&chunk)
-                .await
+        loop {
+            let bytes_read = response
+                .read(&mut buffer)
+                .context("Failed to download chunk")?;
+            if bytes_read == 0 {
+                break;
+            }
+            file.write_all(&buffer[..bytes_read])
                 .context("Failed to write chunk")?;
-            downloaded += chunk.len() as u64;
+            downloaded += bytes_read as u64;
             pb.set_position(downloaded);
         }
 
@@ -217,14 +211,7 @@ impl Downloader {
         Ok(archive_path)
     }
 
-    async fn extract_binary(
-        &self,
-        archive_path: &Path,
-        binary_name: &str,
-        platform: &Platform,
-    ) -> Result<()> {
-        let binary_path = self.binary_path(binary_name, platform);
-
+    fn extract_bundle(&self, archive_path: &Path, platform: &Platform) -> Result<()> {
         match platform.archive_extension() {
             ".tar.gz" => {
                 use flate2::read::GzDecoder;
@@ -238,18 +225,16 @@ impl Downloader {
                     let mut entry = entry?;
                     let path = entry.path()?;
 
-                    if let Some(name) = path.file_name() {
-                        if name == binary_name {
-                            let mut output = File::create(&binary_path)
-                                .context("Failed to create binary file")?;
-                            io::copy(&mut entry, &mut output)
-                                .context("Failed to extract binary")?;
-                            return Ok(());
-                        }
+                    if let Some(target) = self.bundle_target_from_path(&path, platform) {
+                        let target_path = self.binary_path(target, platform);
+                        let mut output =
+                            File::create(&target_path).context("Failed to create binary file")?;
+                        io::copy(&mut entry, &mut output).context("Failed to extract binary")?;
+                        Self::ensure_executable(&target_path)?;
                     }
                 }
 
-                anyhow::bail!("Binary {} not found in archive", binary_name);
+                Ok(())
             }
             ".zip" => {
                 use zip::ZipArchive;
@@ -257,29 +242,59 @@ impl Downloader {
                 let file = File::open(archive_path).context("Failed to open archive")?;
                 let mut archive = ZipArchive::new(file)?;
 
-                let binary_name_with_ext =
-                    format!("{}{}", binary_name, platform.binary_extension());
-
                 for i in 0..archive.len() {
                     let mut file = archive.by_index(i)?;
-                    if let Some(name) = Path::new(file.name()).file_name() {
-                        if name == binary_name_with_ext.as_str() || name == binary_name {
-                            let mut output = File::create(&binary_path)
-                                .context("Failed to create binary file")?;
-                            io::copy(&mut file, &mut output).context("Failed to extract binary")?;
-                            return Ok(());
-                        }
+                    if let Some(target) = self.bundle_target_from_str(file.name(), platform) {
+                        let target_path = self.binary_path(target, platform);
+                        let mut output =
+                            File::create(&target_path).context("Failed to create binary file")?;
+                        io::copy(&mut file, &mut output).context("Failed to extract binary")?;
+                        Self::ensure_executable(&target_path)?;
                     }
                 }
 
-                anyhow::bail!("Binary {} not found in archive", binary_name);
+                Ok(())
             }
             _ => anyhow::bail!("Unsupported archive format"),
         }
     }
 
+    fn bundle_target_from_path(&self, path: &Path, platform: &Platform) -> Option<&'static str> {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|name| self.bundle_target_from_str(name, platform))
+    }
+
+    fn bundle_target_from_str(&self, name: &str, platform: &Platform) -> Option<&'static str> {
+        let cleaned = name.trim_start_matches("./");
+        let base = if platform.binary_extension().is_empty() {
+            cleaned
+        } else {
+            cleaned
+                .strip_suffix(platform.binary_extension())
+                .unwrap_or(cleaned)
+        };
+        BUNDLED_BINARIES
+            .iter()
+            .copied()
+            .find(|candidate| *candidate == base)
+    }
+
+    fn ensure_executable(path: &Path) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if path.exists() {
+                let mut perms = fs::metadata(path)?.permissions();
+                perms.set_mode(0o755);
+                fs::set_permissions(path, perms)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Fetch the CHECKSUMS.txt asset content from a release.
-    async fn fetch_checksums(
+    fn fetch_checksums(
         &self,
         release: &GitHubRelease,
     ) -> Result<HashMap<String, String>, DownloadError> {
@@ -294,10 +309,8 @@ impl Downloader {
         let content = self
             .client
             .get(&checksums_asset.browser_download_url)
-            .send()
-            .await?
-            .text()
-            .await?;
+            .send()?
+            .text()?;
 
         Ok(parse_checksums(&content))
     }
