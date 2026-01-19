@@ -12,9 +12,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Isolate cargo/rustup to temp so self-hosted/act don't touch user installs
-  CARGO_HOME: ${{ runner.temp }}/cargo
-  RUSTUP_HOME: ${{ runner.temp }}/rustup
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -25,6 +22,9 @@ jobs:
     name: Test
     runs-on: ${{ matrix.os }}
     env:
+      # Isolate cargo/rustup to temp so self-hosted/act don't touch user installs
+      CARGO_HOME: ${{ runner.temp }}/cargo
+      RUSTUP_HOME: ${{ runner.temp }}/rustup
       RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
     strategy:
       matrix:
@@ -67,6 +67,8 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     env:
+      CARGO_HOME: ${{ runner.temp }}/cargo
+      RUSTUP_HOME: ${{ runner.temp }}/rustup
       RUSTUP_TOOLCHAIN: stable
     strategy:
       matrix:
