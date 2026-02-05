@@ -21,6 +21,7 @@ indicatif = "0.17"
 console = "0.15"
 thiserror = "2"
 dialoguer = "0.11"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 assert_cmd = "2"

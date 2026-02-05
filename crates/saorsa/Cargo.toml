@@ -24,3 +24,4 @@ clap = { version = "4", features = ["derive"] }
 dirs = "6"
 color-eyre = "0.6"
 parking_lot = "0.12"
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }

@@ -1,5 +1,5 @@
 [workspace]
-members = ["sb", "sdisk", "cli", "crates/saorsa-cli-core", "crates/saorsa-ui", "crates/saorsa-sb", "crates/saorsa-disk", "crates/saorsa-git", "crates/saorsa"]
+members = ["sb", "sdisk", "cli", "crates/saorsa-cli-core", "crates/saorsa-ui", "crates/saorsa-sb", "crates/saorsa-disk", "crates/saorsa-git", "crates/saorsa", "workspace-hack"]
 default-members = ["crates/saorsa"]
 resolver = "2"
 
