@@ -95,12 +95,18 @@ impl PluginsTab {
         self.running = Some(name.clone());
         self.status = Some(format!("Running {name}..."));
 
+        let plugin = match self.manager.lock().plugin_instance(&name) {
+            Ok(plugin) => plugin,
+            Err(err) => {
+                self.running = None;
+                self.status = Some(format!("Failed to prepare {name}: {err}"));
+                return;
+            }
+        };
+
         let sender = self.sender.clone();
-        let manager = self.manager.clone();
         thread::spawn(move || {
-            let result = manager
-                .lock()
-                .execute_plugin(&name, &[], PluginContext::default());
+            let result = plugin.execute(&[], PluginContext::default());
             let _ = sender.send(PluginJobMessage::Finished { name, result });
         });
     }
@@ -306,11 +312,8 @@ impl Tab for PluginsTab {
         let status = Paragraph::new(status_lines.join("\n"))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::TOP));
-        let status_area = if has_panel {
-            *chunks.last().unwrap()
-        } else {
-            chunks[1]
-        };
+        let status_index = if has_panel { 2 } else { 1 };
+        let status_area = chunks.get(status_index).copied().unwrap_or(area);
         frame.render_widget(status, status_area);
     }
 

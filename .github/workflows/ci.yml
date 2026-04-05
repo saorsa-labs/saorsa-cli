@@ -106,9 +106,15 @@ jobs:
       shell: bash
       run: |
         if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          7z a saorsa-cli-${{ matrix.target }}.zip ./target/${{ matrix.target }}/release/sb.exe ./target/${{ matrix.target }}/release/sdisk.exe ./target/${{ matrix.target }}/release/saorsa.exe
+          7z a saorsa-cli-${{ matrix.target }}.zip \
+            ./target/${{ matrix.target }}/release/saorsa.exe \
+            ./target/${{ matrix.target }}/release/saorsa-cli.exe \
+            ./target/${{ matrix.target }}/release/sb.exe \
+            ./target/${{ matrix.target }}/release/sdisk.exe
         else
-          tar czf saorsa-cli-${{ matrix.target }}.tar.gz -C ./target/${{ matrix.target }}/release sb sdisk saorsa
+          tar czf saorsa-cli-${{ matrix.target }}.tar.gz \
+            -C ./target/${{ matrix.target }}/release \
+            saorsa saorsa-cli sb sdisk
         fi
     
     - name: Upload artifacts

@@ -6,7 +6,8 @@
 use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::version;
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// Result of an update check.
 #[allow(dead_code)] // Used in Task 2 integration
@@ -46,7 +47,7 @@ impl UpdateChecker {
     pub fn check(&self) -> Option<UpdateCheckResult> {
         // Check if we should even run (respects --no-update-check and cache)
         {
-            let config = self.config.read().ok()?;
+            let config = self.config.read();
             if !config.should_check_for_updates() {
                 // Return cached result if available
                 if let Some(latest) = config.get_latest_version() {
@@ -82,12 +83,11 @@ impl UpdateChecker {
                 let update_available = version::update_available(current, latest).unwrap_or(false);
 
                 // Update cache
-                if let Ok(mut config) = self.config.write() {
-                    config.record_update_check(Some(latest.to_string()));
-                    // Save config (ignore errors for background task)
-                    if let Err(e) = config.save() {
-                        tracing::debug!("Failed to save config after update check: {}", e);
-                    }
+                let mut config = self.config.write();
+                config.record_update_check(Some(latest.to_string()));
+                // Save config (ignore errors for background task)
+                if let Err(e) = config.save() {
+                    tracing::debug!("Failed to save config after update check: {}", e);
                 }
 
                 Some(UpdateCheckResult {

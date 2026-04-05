@@ -63,7 +63,7 @@ impl Downloader {
         fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
 
         let client = Client::builder()
-            .user_agent("saorsa-cli/0.1.0")
+            .user_agent(format!("saorsa-cli/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .context("Failed to create HTTP client")?;
 

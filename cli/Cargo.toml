@@ -5,8 +5,8 @@ edition = "2021"
 rust-version = "1.82"
 authors = ["David Irvine <david.irvine@saorsa.net>"]
 description = "Interactive CLI menu for Saorsa tools with automatic binary management"
-repository = "https://github.com/dirvine/saorsa-cli"
-homepage = "https://github.com/dirvine/saorsa-cli"
+repository = "https://github.com/saorsa-labs/saorsa-cli"
+homepage = "https://github.com/saorsa-labs/saorsa-cli"
 license = "MIT OR Apache-2.0"
 keywords = ["cli", "menu", "terminal", "saorsa"]
 categories = ["command-line-utilities"]
@@ -57,6 +57,7 @@ toml = "0.8"
 # Version management
 semver = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
 saorsa-cli-core = { path = "../crates/saorsa-cli-core" }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 

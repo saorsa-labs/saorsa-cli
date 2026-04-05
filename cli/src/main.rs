@@ -18,11 +18,12 @@ use anyhow::{Context, Result};
 use chrono::Local;
 use clap::Parser;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
+use parking_lot::RwLock;
 use saorsa_cli_core::{
     PluginContext, PluginDescriptor, PluginHistory, PluginManager, PluginRunStats,
 };
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 use tracing_subscriber::EnvFilter;
@@ -116,9 +117,7 @@ fn main() -> Result<()> {
         let update_result_clone = Arc::clone(&update_result);
         thread::spawn(move || {
             if let Some(result) = update_checker.check() {
-                if let Ok(mut lock) = update_result_clone.write() {
-                    *lock = Some(result);
-                }
+                *update_result_clone.write() = Some(result);
             }
         });
     }
@@ -138,7 +137,7 @@ fn main() -> Result<()> {
 
     // Handle direct run mode
     if let Some(tool) = args.run.as_ref() {
-        let config_read = config.read().unwrap();
+        let config_read = config.read();
         return run_tool_directly(
             tool,
             args.tool_args,
@@ -155,14 +154,14 @@ fn main() -> Result<()> {
 
     loop {
         // Refresh update status (background task may have completed)
-        if let Some(result) = update_result.read().unwrap().clone() {
+        if let Some(result) = update_result.read().clone() {
             if result.update_available {
                 menu.set_update_status(result.latest_version.clone());
             }
         }
 
         // Check for binaries and update menu
-        let config_read = config.read().unwrap();
+        let config_read = config.read();
         let (saorsa_path, sb_path, sdisk_path) =
             check_binaries(&config_read, &platform, &downloader, &runner)?;
         drop(config_read); // Release lock before menu interaction
@@ -323,11 +322,13 @@ fn main() -> Result<()> {
                 }
             }
             MenuChoice::Settings => {
-                let mut config_write = config.write().unwrap();
-                *config_write = show_settings_menu(config_write.clone())?;
-                config_write
-                    .save()
-                    .context("Failed to save configuration")?;
+                let mut config_write = config.write();
+                if let Some(updated_config) = show_settings_menu(config_write.clone())? {
+                    *config_write = updated_config;
+                    config_write
+                        .save()
+                        .context("Failed to save configuration")?;
+                }
             }
             MenuChoice::Plugins => {
                 show_plugins_menu(&mut plugin_manager)?;
@@ -507,8 +508,10 @@ fn run_tool_directly(
 
 /// Interactive settings configuration menu.
 #[allow(clippy::too_many_lines)]
-fn show_settings_menu(mut config: Config) -> Result<Config> {
+fn show_settings_menu(initial_config: Config) -> Result<Option<Config>> {
     use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
+
+    let mut config = initial_config;
 
     loop {
         println!("\n=== Settings Configuration ===\n");
@@ -584,11 +587,11 @@ fn show_settings_menu(mut config: Config) -> Result<Config> {
             }
             6 => {
                 // Save and Return
-                return Ok(config);
+                return Ok(Some(config));
             }
             7 => {
                 // Cancel
-                return Ok(config);
+                return Ok(None);
             }
             _ => unreachable!(),
         }

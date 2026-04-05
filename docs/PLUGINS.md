@@ -83,7 +83,7 @@ resulting `.so/.dylib/.dll` next to the manifest.
 ## Testing a Plugin
 
 1. Drop the directory into one of the search paths above.
-2. Run `saorsa-cli --plugin sample` or open the `Plugins` tab inside `saorsa`.
+2. Run `saorsa-cli --plugin sample -- [plugin args...]` or open the `Plugins` tab inside `saorsa`.
 3. Use the built-in refresh action if you modify binaries in place.
 
 ## Troubleshooting

@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use console::style;
 use dialoguer::{theme::ColorfulTheme, MultiSelect};
@@ -112,17 +112,113 @@ fn cmd_info() -> Result<()> {
 fn collect_roots(opt_root: Option<PathBuf>, extra: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Some(r) = opt_root {
-        roots.push(r);
+        roots.push(canonicalize_root(&r)?);
     }
     for p in extra {
-        if !roots.contains(&p) {
-            roots.push(p);
+        let canonical = canonicalize_root(&p)?;
+        if !roots.contains(&canonical) {
+            roots.push(canonical);
         }
     }
     if roots.is_empty() {
-        roots.push(std::env::current_dir()?);
+        roots.push(canonicalize_root(&std::env::current_dir()?)?);
     }
     Ok(roots)
+}
+
+#[derive(Debug, Clone)]
+struct DeleteTarget {
+    canonical_path: PathBuf,
+    is_dir: bool,
+}
+
+#[derive(Debug, Clone)]
+struct DeletionGuard {
+    allowed_roots: Vec<PathBuf>,
+}
+
+impl DeletionGuard {
+    fn new(roots: &[PathBuf]) -> Result<Self> {
+        let mut allowed_roots = Vec::new();
+        for root in roots {
+            let canonical = canonicalize_root(root)?;
+            if !allowed_roots.contains(&canonical) {
+                allowed_roots.push(canonical);
+            }
+        }
+        Ok(Self { allowed_roots })
+    }
+
+    fn describe_prompt(&self, item_count: usize, dir_count: usize) -> String {
+        if dir_count > 0 {
+            format!(
+                "Delete {item_count} selected items including {dir_count} director{} recursively?",
+                if dir_count == 1 { "y" } else { "ies" }
+            )
+        } else {
+            format!("Delete {item_count} selected file(s)?")
+        }
+    }
+
+    fn is_allowed_candidate(&self, path: &Path) -> bool {
+        self.validate(path).is_ok()
+    }
+
+    fn delete(&self, path: &Path) -> Result<()> {
+        let target = self.validate(path)?;
+        if target.is_dir {
+            std::fs::remove_dir_all(&target.canonical_path).with_context(|| {
+                format!("removing directory {}", target.canonical_path.display())
+            })?;
+        } else {
+            std::fs::remove_file(&target.canonical_path)
+                .with_context(|| format!("removing file {}", target.canonical_path.display()))?;
+        }
+        Ok(())
+    }
+
+    fn validate(&self, path: &Path) -> Result<DeleteTarget> {
+        let metadata = std::fs::symlink_metadata(path)
+            .with_context(|| format!("inspecting delete target {}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(anyhow!(
+                "refusing to delete symlink target {}",
+                path.display()
+            ));
+        }
+
+        let canonical_path = path
+            .canonicalize()
+            .with_context(|| format!("resolving delete target {}", path.display()))?;
+
+        if self.allowed_roots.contains(&canonical_path) {
+            return Err(anyhow!(
+                "refusing to delete scan root {}",
+                canonical_path.display()
+            ));
+        }
+
+        if !self
+            .allowed_roots
+            .iter()
+            .any(|root| canonical_path.starts_with(root))
+        {
+            return Err(anyhow!(
+                "refusing to delete path outside scan roots: {}",
+                canonical_path.display()
+            ));
+        }
+
+        Ok(DeleteTarget {
+            canonical_path,
+            is_dir: metadata.is_dir(),
+        })
+    }
+}
+
+fn canonicalize_root(path: &Path) -> Result<PathBuf> {
+    path.canonicalize()
+        .with_context(|| format!("resolving scan root {}", path.display()))
 }
 
 fn cmd_top(
@@ -132,6 +228,7 @@ fn cmd_top(
     yes: bool,
     dry_run: bool,
 ) -> Result<()> {
+    let delete_guard = DeletionGuard::new(&roots)?;
     for root in &roots {
         println!("{} {}", style("Scanning").bold(), root.display());
     }
@@ -183,19 +280,13 @@ fn cmd_top(
             }
             return Ok(());
         }
-        if !yes && !confirm("Delete selected files?")? {
+        if !yes && !confirm(&delete_guard.describe_prompt(selection.len(), 0))? {
             println!("Aborted.");
             return Ok(());
         }
         for idx in selection {
             let path = &entries[idx].0;
-            if path.is_file() {
-                std::fs::remove_file(path)
-                    .with_context(|| format!("removing file {}", path.display()))?;
-            } else {
-                std::fs::remove_dir_all(path)
-                    .with_context(|| format!("removing directory {}", path.display()))?;
-            }
+            delete_guard.delete(path)?;
             println!("Removed {}", path.display());
         }
     }
@@ -210,6 +301,7 @@ fn cmd_stale(
     prompt: bool,
     dry_run: bool,
 ) -> Result<()> {
+    let delete_guard = DeletionGuard::new(&roots)?;
     use std::time::{Duration, SystemTime};
 
     let cutoff = SystemTime::now() - Duration::from_secs(days * 24 * 60 * 60);
@@ -234,7 +326,7 @@ fn cmd_stale(
                     .ok()
                     .or_else(|| meta.modified().ok())
                     .unwrap_or(SystemTime::UNIX_EPOCH);
-                if time <= cutoff {
+                if time <= cutoff && delete_guard.is_allowed_candidate(&path) {
                     let size = if meta.is_file() {
                         meta.len()
                     } else {
@@ -300,37 +392,30 @@ fn cmd_stale(
             }
             return Ok(());
         }
-        if !confirm("Delete selected items?")? {
+        let dir_count = selection
+            .iter()
+            .filter(|&&idx| items[idx].0.is_dir())
+            .count();
+        if !confirm(&delete_guard.describe_prompt(selection.len(), dir_count))? {
             println!("Aborted.");
             return Ok(());
         }
         for idx in selection {
             let path = &items[idx].0;
-            if path.is_file() {
-                std::fs::remove_file(path)
-                    .with_context(|| format!("removing file {}", path.display()))?;
-            } else {
-                std::fs::remove_dir_all(path)
-                    .with_context(|| format!("removing directory {}", path.display()))?;
-            }
+            delete_guard.delete(path)?;
             println!("Removed {}", path.display());
         }
         return Ok(());
     }
 
-    if prompt && !confirm("Delete the above items?")? {
+    let dir_count = items.iter().filter(|(path, _, _)| path.is_dir()).count();
+    if prompt && !confirm(&delete_guard.describe_prompt(items.len(), dir_count))? {
         println!("Aborted.");
         return Ok(());
     }
 
     for (path, _, _) in items {
-        if path.is_file() {
-            std::fs::remove_file(&path)
-                .with_context(|| format!("removing file {}", path.display()))?;
-        } else {
-            std::fs::remove_dir_all(&path)
-                .with_context(|| format!("removing directory {}", path.display()))?;
-        }
+        delete_guard.delete(&path)?;
         println!("Removed {}", path.display());
     }
 
@@ -369,4 +454,52 @@ fn confirm(prompt: &str) -> Result<bool> {
     io::stdin().read_line(&mut input).context("reading input")?;
     let trimmed = input.trim().to_lowercase();
     Ok(trimmed == "y" || trimmed == "yes")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn deletion_guard_rejects_scan_root() {
+        let root = tempdir().expect("tempdir");
+        let guard = DeletionGuard::new(&[root.path().to_path_buf()]).expect("guard");
+
+        let err = guard
+            .validate(root.path())
+            .expect_err("scan root must not be deletable");
+        assert!(err.to_string().contains("scan root"));
+    }
+
+    #[test]
+    fn deletion_guard_allows_nested_file() {
+        let root = tempdir().expect("tempdir");
+        let file = root.path().join("cache.log");
+        std::fs::write(&file, "cache").expect("write file");
+        let guard = DeletionGuard::new(&[root.path().to_path_buf()]).expect("guard");
+
+        let target = guard.validate(&file).expect("nested file should validate");
+        assert!(!target.is_dir);
+        assert_eq!(
+            target.canonical_path,
+            file.canonicalize().expect("canonical path")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deletion_guard_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().expect("tempdir");
+        let target = root.path().join("target.txt");
+        let link = root.path().join("target.link");
+        std::fs::write(&target, "target").expect("write target");
+        symlink(&target, &link).expect("symlink");
+
+        let guard = DeletionGuard::new(&[root.path().to_path_buf()]).expect("guard");
+        let err = guard.validate(&link).expect_err("symlink must be rejected");
+        assert!(err.to_string().contains("symlink"));
+    }
 }

@@ -8,8 +8,8 @@ authors = ["David Irvine <david.irvine@maidsafe.net>"]
 edition = "2021"
 rust-version = "1.82"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/dirvine/saorsa-cli"
-homepage = "https://github.com/dirvine/saorsa-cli"
+repository = "https://github.com/saorsa-labs/saorsa-cli"
+homepage = "https://github.com/saorsa-labs/saorsa-cli"
 
 [workspace.dependencies]
 clap = { version = "4.5", features = ["derive"] }

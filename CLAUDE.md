@@ -38,7 +38,7 @@ When adding new features, ensure **every** action has a reachable keybinding and
 
 1. `cargo fmt --all`
 2. `cargo clippy --all-features --all-targets -- -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used`
-3. `cargo test --all`
+3. `cargo nextest run`
 4. `cargo run --bin saorsa` - flip through every tab and run at least one plugin
 5. `./scripts/create-release.sh vX.Y.Z` when tagging releases
 6. Audit plugin directories (`~/.saorsa/plugins`, `./plugins`) before shipping because plugins execute unsandboxed native code.

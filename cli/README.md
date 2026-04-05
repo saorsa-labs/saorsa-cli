@@ -1,84 +1,93 @@
-# Saorsa CLI (Bootstrapper)
+# saorsa-cli
 
-`saorsa-cli` is the lightweight bootstrapper and downloader for the Saorsa ecosystem. It
-detects your platform, fetches first-party binaries, and presents an interactive menu with
-“Launch Saorsa” as the primary action so you can get into the full TUI workspace quickly.
+`saorsa-cli` is the lightweight bootstrapper for the Saorsa workspace. It can:
 
-## Features
+- launch the unified `saorsa` TUI
+- download/update first-party binaries from GitHub Releases
+- run `sb` and `sdisk` directly
+- execute installed plugins
 
-- **Launch Saorsa**: One-keystroke option to install/launch the unified Saorsa TUI
-- **Interactive Menu**: Terminal UI for launching `sb`, `sdisk`, or managing settings when the full TUI isn't available yet
-- **Automatic Downloads**: Automatically downloads binaries from GitHub releases
-- **Platform Detection**: Detects OS and architecture to download appropriate binaries
-- **Binary Caching**: Caches downloaded binaries for faster subsequent launches
-- **Update Management**: Check for and download newer versions of tools
-- **Direct Execution**: Run tools directly without menu using `--run` flag
+## Build
 
-## Installation
+From the workspace root:
 
-Build from source:
 ```bash
-cargo build --release --package cli
+cargo build --release -p cli
 ```
 
-The binary will be available at `target/release/saorsa-cli`.
+The binary will be written to `target/release/saorsa-cli`.
 
 ## Usage
 
-### Interactive Menu Mode
+### Interactive menu
 
-Run without arguments to launch the interactive menu:
 ```bash
 saorsa-cli
 ```
 
-Menu options:
-- **Launch Saorsa**: Install (if needed) and start the full TUI workspace
-- **Run Saorsa Browser (sb)**: Launch the markdown browser/editor
-- **Run Saorsa Disk (sdisk)**: Launch the disk cleanup utility
-- **Update Binaries**: Download latest versions of tools
-- **Settings**: View current configuration
-- **Exit**: Close the menu
+Menu entries include:
+
+- Launch Saorsa
+- Run `sb`
+- Run `sdisk`
+- Update binaries
+- Update `saorsa-cli`
+- Settings
+- Plugins
+- Exit
 
 Navigation:
-- Use arrow keys or `j/k` to navigate
-- Press Enter or Space to select
-- Press `q` or Esc to exit
 
-### Direct Run Mode
+- `↑/↓` or `j/k` — move
+- `Enter` / `Space` — select
+- `q` / `Esc` — quit
 
-Run a specific tool directly (helpful for CI or scripting):
+### Direct-run mode
+
 ```bash
-# Run sb (Saorsa Browser)
 saorsa-cli --run sb [args...]
-
-# Run sdisk
 saorsa-cli --run sdisk [args...]
-
-# Once Saorsa is installed, run it directly:
-saorsa
 ```
 
-### Command-Line Options
+`--run` currently supports `sb` and `sdisk`.
 
-- `--no-update-check`: Disable automatic update checks
-- `--use-system`: Use system-installed binaries instead of downloading
-- `--force-download`: Force re-download of binaries
-- `-v, --verbose`: Enable verbose logging
-- `-r, --run <tool>`: Run a specific tool directly (sb or sdisk)
+### Plugin execution
+
+```bash
+saorsa-cli --plugin rg -- foo src
+saorsa-cli --plugin fd -- Cargo .
+```
+
+## Command-line flags
+
+- `--no-update-check` — disable startup update checks
+- `--use-system` — prefer binaries already on your `PATH`
+- `--force-download` — force re-download of release artifacts
+- `-v, --verbose` — enable verbose logging
+- `-r, --run <tool>` — run `sb` or `sdisk` directly
+- `--plugin <name>` — execute a plugin
+- trailing args after `--run` or `--plugin` are forwarded to the selected tool/plugin
 
 ## Configuration
 
-Configuration is stored in `~/.config/saorsa-cli/config.toml`:
+The config file is stored in the platform config directory under `saorsa-cli/config.toml`.
+
+Typical locations:
+
+- macOS: `~/Library/Application Support/saorsa-cli/config.toml`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/saorsa-cli/config.toml`
+- Windows: `%APPDATA%\saorsa-cli\config.toml`
+
+Example:
 
 ```toml
 [github]
-owner = "dirvine"
+owner = "saorsa-labs"
 repo = "saorsa-cli"
 check_prerelease = false
 
 [cache]
-directory = null  # Uses default cache directory
+directory = null
 auto_clean = false
 max_versions = 3
 
@@ -88,33 +97,27 @@ use_system_binaries = false
 prefer_local_build = false
 ```
 
-## Binary Storage
+Legacy configs that still point to `dirvine/saorsa-cli` are migrated in memory to `saorsa-labs/saorsa-cli`.
 
-Downloaded binaries are cached in:
+## Binary cache
+
+Downloaded binaries are stored under the platform cache directory in `saorsa-cli/binaries/`.
+
+Typical locations:
+
 - macOS: `~/Library/Caches/saorsa-cli/binaries/`
-- Linux: `~/.cache/saorsa-cli/binaries/`
+- Linux: `${XDG_CACHE_HOME:-~/.cache}/saorsa-cli/binaries/`
 - Windows: `%LOCALAPPDATA%\saorsa-cli\cache\binaries\`
 
-## Platform Support
+## Releases
 
-The CLI automatically detects and downloads binaries for:
-- macOS (x86_64, aarch64/ARM64)
-- Linux (x86_64, aarch64)
-- Windows (x86_64, aarch64)
-
-## Building Releases
-
-To build binaries for distribution:
+For a local release validation pass:
 
 ```bash
-# Build all workspace members
-cargo build --release
-
-# The binaries will be at:
-# - target/release/sb
-# - target/release/sdisk
-# - target/release/saorsa-cli
+./scripts/create-release.sh vX.Y.Z
 ```
+
+That script validates a local release build and can optionally push a tag. GitHub Actions produces the final signed release artifacts after the tag is pushed.
 
 ## License
 

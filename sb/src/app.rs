@@ -49,6 +49,13 @@ pub struct FileNode {
     pub is_dir: bool,
 }
 
+#[derive(Debug, Clone)]
+struct DeleteCandidate {
+    original_path: PathBuf,
+    canonical_path: PathBuf,
+    is_dir: bool,
+}
+
 pub struct App {
     pub root: PathBuf,
     pub focus: Focus,
@@ -619,6 +626,75 @@ impl App {
         }
     }
 
+    fn workspace_root(&self) -> Result<PathBuf> {
+        self.root
+            .canonicalize()
+            .with_context(|| format!("Resolving workspace root {}", self.root.display()))
+    }
+
+    fn validate_delete_candidate(&self, path: &Path) -> Result<DeleteCandidate> {
+        let metadata = fs::symlink_metadata(path)
+            .with_context(|| format!("Inspecting delete target {}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            anyhow::bail!("Refusing to delete symlink {}", path.display());
+        }
+
+        let canonical_path = path
+            .canonicalize()
+            .with_context(|| format!("Resolving delete target {}", path.display()))?;
+        let workspace_root = self.workspace_root()?;
+
+        if canonical_path == workspace_root {
+            anyhow::bail!(
+                "Refusing to delete the workspace root {}",
+                workspace_root.display()
+            );
+        }
+
+        if !canonical_path.starts_with(&workspace_root) {
+            anyhow::bail!(
+                "Refusing to delete path outside workspace root: {}",
+                canonical_path.display()
+            );
+        }
+
+        Ok(DeleteCandidate {
+            original_path: path.to_path_buf(),
+            canonical_path,
+            is_dir: metadata.is_dir(),
+        })
+    }
+
+    fn delete_candidate(&self, candidate: &DeleteCandidate) -> Result<()> {
+        if candidate.is_dir {
+            fs::remove_dir_all(&candidate.canonical_path).with_context(|| {
+                format!("Deleting directory {}", candidate.canonical_path.display())
+            })?;
+        } else if candidate.canonical_path.exists() {
+            fs::remove_file(&candidate.canonical_path)
+                .with_context(|| format!("Deleting file {}", candidate.canonical_path.display()))?;
+        }
+        Ok(())
+    }
+
+    fn clear_opened_for_deleted_path(&mut self, candidate: &DeleteCandidate) {
+        let should_clear = self.opened.as_ref().is_some_and(|opened| {
+            opened == &candidate.original_path
+                || opened
+                    .canonicalize()
+                    .map(|path| {
+                        path == candidate.canonical_path
+                            || path.starts_with(&candidate.canonical_path)
+                    })
+                    .unwrap_or(false)
+        });
+
+        if should_clear {
+            self.opened = None;
+            self.editor.set_text("");
+        }
+    }
+
     pub fn begin_delete(&mut self) {
         // Determine target from selection
         if let Some(id) = self.left_state.selected().last() {
@@ -635,15 +711,17 @@ impl App {
     #[allow(dead_code)]
     pub fn confirm_delete(&mut self) -> Result<()> {
         if let Some(path) = self.delete_target.clone() {
-            if path.is_dir() {
-                std::fs::remove_dir_all(&path)?;
-            } else if path.exists() {
-                std::fs::remove_file(&path)?;
-            }
-            if self.opened.as_ref().map(|p| p == &path).unwrap_or(false) {
-                self.opened = None;
-                self.editor.set_text("");
-            }
+            let candidate = match self.validate_delete_candidate(&path) {
+                Ok(candidate) => candidate,
+                Err(err) => {
+                    self.status = format!("Delete blocked: {err}");
+                    self.confirming_delete = false;
+                    self.delete_target = None;
+                    return Ok(());
+                }
+            };
+            self.delete_candidate(&candidate)?;
+            self.clear_opened_for_deleted_path(&candidate);
             self.refresh_tree()?;
             self.status = format!("Deleted {}", path.display());
         }
@@ -1170,30 +1248,48 @@ impl App {
                     .collect()
             };
 
+            if selected_files.is_empty() {
+                self.status = "No files selected for deletion".to_string();
+                self.confirming_delete = false;
+                return Ok(());
+            }
+
+            let selected_candidates: Vec<DeleteCandidate> = match selected_files
+                .iter()
+                .map(|path| self.validate_delete_candidate(path))
+                .collect()
+            {
+                Ok(candidates) => candidates,
+                Err(err) => {
+                    self.status = format!("Delete blocked: {err}");
+                    self.confirming_delete = false;
+                    return Ok(());
+                }
+            };
+
             let mut deleted_count = 0;
             let mut git_deleted_count = 0;
 
-            for path in &selected_files {
-                if self.is_in_git_repo(path) {
+            for candidate in &selected_candidates {
+                if self.is_in_git_repo(&candidate.canonical_path) {
                     if let Some(ref repo) = self.git_repo {
-                        match repo.remove_file(path) {
-                            Ok(()) => {
-                                git_deleted_count += 1;
-                                deleted_count += 1;
-                            }
-                            Err(_) => {
-                                // Fallback to regular file deletion
-                                if path.exists() {
-                                    std::fs::remove_file(path)?;
-                                    deleted_count += 1;
-                                }
-                            }
+                        if let Err(err) = repo.remove_file(&candidate.canonical_path) {
+                            self.status = format!(
+                                "Git delete failed for {}: {}",
+                                candidate.original_path.display(),
+                                err
+                            );
+                            self.confirming_delete = false;
+                            return Ok(());
                         }
+                        git_deleted_count += 1;
+                        deleted_count += 1;
                     }
-                } else if path.exists() {
-                    std::fs::remove_file(path)?;
+                } else {
+                    self.delete_candidate(candidate)?;
                     deleted_count += 1;
                 }
+                self.clear_opened_for_deleted_path(candidate);
             }
 
             if git_deleted_count > 0 && deleted_count > git_deleted_count {
@@ -1209,8 +1305,8 @@ impl App {
 
             // Remove all deleted files from picker cache or refresh tree
             if self.picking_file {
-                for path in &selected_files {
-                    self.remove_picker_item(path);
+                for candidate in &selected_candidates {
+                    self.remove_picker_item(&candidate.original_path);
                 }
             } else {
                 self.refresh_tree()?;
@@ -1225,40 +1321,47 @@ impl App {
             }
             self.refresh_git_status();
         } else if let Some(path) = self.delete_target.take() {
-            // Single file delete (original behavior)
-            if self.is_in_git_repo(&path) {
-                if let Some(ref repo) = self.git_repo {
-                    match repo.remove_file(&path) {
-                        Ok(()) => {
-                            self.status = format!(
-                                "Git removed: {}",
-                                path.file_name().unwrap_or_default().to_string_lossy()
-                            );
-                        }
-                        Err(_) => {
-                            // Fallback to regular file deletion
-                            if path.exists() {
-                                std::fs::remove_file(&path)?;
-                                self.status = format!(
-                                    "Deleted: {}",
-                                    path.file_name().unwrap_or_default().to_string_lossy()
-                                );
-                            }
-                        }
-                    }
+            let candidate = match self.validate_delete_candidate(&path) {
+                Ok(candidate) => candidate,
+                Err(err) => {
+                    self.status = format!("Delete blocked: {err}");
+                    self.confirming_delete = false;
+                    return Ok(());
                 }
-            } else if path.exists() {
-                std::fs::remove_file(&path)?;
+            };
+
+            if candidate.is_dir {
+                self.delete_candidate(&candidate)?;
+                self.status = format!(
+                    "Deleted directory: {}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                );
+            } else if self.is_in_git_repo(&candidate.canonical_path) {
+                if let Some(ref repo) = self.git_repo {
+                    if let Err(err) = repo.remove_file(&candidate.canonical_path) {
+                        self.status = format!("Git delete failed for {}: {}", path.display(), err);
+                        self.confirming_delete = false;
+                        return Ok(());
+                    }
+                    self.status = format!(
+                        "Git removed: {}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    );
+                }
+            } else {
+                self.delete_candidate(&candidate)?;
                 self.status = format!(
                     "Deleted: {}",
                     path.file_name().unwrap_or_default().to_string_lossy()
                 );
             }
 
+            self.clear_opened_for_deleted_path(&candidate);
+
             // Refresh the UI - picker if in picker mode, otherwise main tree
             if self.picking_file {
                 // Use optimized removal instead of full directory rescan
-                self.remove_picker_item(&path);
+                self.remove_picker_item(&candidate.original_path);
             } else {
                 self.refresh_tree()?;
             }
@@ -1271,7 +1374,9 @@ impl App {
     /// Check if a path is within the Git repository
     fn is_in_git_repo(&self, path: &Path) -> bool {
         if let Some(ref repo) = self.git_repo {
-            path.starts_with(repo.root())
+            path.canonicalize()
+                .map(|resolved| resolved.starts_with(repo.root()))
+                .unwrap_or_else(|_| path.starts_with(repo.root()))
         } else {
             false
         }
@@ -2108,4 +2213,56 @@ fn copy_dir_all(src: &Path, dst: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn delete_candidate_rejects_workspace_root() {
+        let root = tempdir().expect("tempdir");
+        let app = App::new(root.path().to_path_buf()).expect("app");
+
+        let err = app
+            .validate_delete_candidate(root.path())
+            .expect_err("workspace root must not be deletable");
+        assert!(err.to_string().contains("workspace root"));
+    }
+
+    #[test]
+    fn confirm_delete_with_git_deletes_directory() {
+        let root = tempdir().expect("tempdir");
+        let nested_dir = root.path().join("old-cache");
+        std::fs::create_dir(&nested_dir).expect("create dir");
+        std::fs::write(nested_dir.join("temp.txt"), "data").expect("write file");
+
+        let mut app = App::new(root.path().to_path_buf()).expect("app");
+        app.delete_target = Some(nested_dir.clone());
+        app.confirming_delete = true;
+
+        app.confirm_delete_with_git().expect("delete directory");
+
+        assert!(!nested_dir.exists());
+        assert!(app.status.contains("Deleted directory"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_candidate_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().expect("tempdir");
+        let target = root.path().join("target.txt");
+        let link = root.path().join("target.link");
+        std::fs::write(&target, "target").expect("write target");
+        symlink(&target, &link).expect("symlink");
+
+        let app = App::new(root.path().to_path_buf()).expect("app");
+        let err = app
+            .validate_delete_candidate(&link)
+            .expect_err("symlink deletion should be blocked");
+        assert!(err.to_string().contains("symlink"));
+    }
 }

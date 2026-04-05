@@ -10,6 +10,7 @@ use std::fs;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 mod builtin_plugins;
 use builtin_plugins::builtin_plugins;
@@ -81,7 +82,7 @@ type PluginInit = unsafe extern "C" fn() -> *mut dyn Plugin;
 
 struct LoadedPlugin {
     descriptor: PluginDescriptor,
-    instance: Box<dyn Plugin>,
+    instance: Arc<dyn Plugin>,
     _library: Option<Library>,
 }
 
@@ -89,7 +90,7 @@ impl LoadedPlugin {
     fn dynamic(descriptor: PluginDescriptor, instance: Box<dyn Plugin>, library: Library) -> Self {
         Self {
             descriptor,
-            instance,
+            instance: Arc::from(instance),
             _library: Some(library),
         }
     }
@@ -97,7 +98,7 @@ impl LoadedPlugin {
     fn builtin(descriptor: PluginDescriptor, instance: Box<dyn Plugin>) -> Self {
         Self {
             descriptor,
-            instance,
+            instance: Arc::from(instance),
             _library: None,
         }
     }
@@ -180,6 +181,14 @@ impl PluginManager {
             .collect()
     }
 
+    pub fn plugin_instance(&self, name: &str) -> CoreResult<Arc<dyn Plugin>> {
+        let plugin = self
+            .plugins
+            .get(name)
+            .ok_or_else(|| crate::CoreError::PluginNotFound(name.to_string()))?;
+        Ok(Arc::clone(&plugin.instance))
+    }
+
     /// Execute plugin by name.
     pub fn execute_plugin(
         &self,
@@ -187,11 +196,8 @@ impl PluginManager {
         args: &[String],
         ctx: PluginContext<'_>,
     ) -> CoreResult<()> {
-        let plugin = self
-            .plugins
-            .get(name)
-            .ok_or_else(|| crate::CoreError::PluginNotFound(name.to_string()))?;
-        plugin.instance.execute(args, ctx)
+        let plugin = self.plugin_instance(name)?;
+        plugin.execute(args, ctx)
     }
 
     /// Returns detailed help text for a plugin if available.

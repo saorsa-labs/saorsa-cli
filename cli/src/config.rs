@@ -5,6 +5,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+const DEFAULT_GITHUB_OWNER: &str = "saorsa-labs";
+const DEFAULT_GITHUB_REPO: &str = "saorsa-cli";
+const LEGACY_GITHUB_OWNER: &str = "dirvine";
+
 /// Main configuration structure for the Saorsa CLI
 ///
 /// This struct contains all configurable options for the CLI application,
@@ -63,8 +67,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             github: GitHubConfig {
-                owner: "dirvine".to_string(),
-                repo: "saorsa-cli".to_string(),
+                owner: DEFAULT_GITHUB_OWNER.to_string(),
+                repo: DEFAULT_GITHUB_REPO.to_string(),
                 check_prerelease: false,
             },
             cache: CacheConfig {
@@ -90,8 +94,10 @@ impl Config {
             let contents = fs::read_to_string(&config_path)
                 .with_context(|| format!("Failed to read config from {:?}", config_path))?;
 
-            toml::from_str(&contents)
-                .with_context(|| format!("Failed to parse config from {:?}", config_path))
+            let mut config: Self = toml::from_str(&contents)
+                .with_context(|| format!("Failed to parse config from {:?}", config_path))?;
+            config.migrate_legacy_origin();
+            Ok(config)
         } else {
             let config = Self::default();
             config.save()?;
@@ -158,6 +164,12 @@ impl Config {
         }
         if use_system {
             self.behavior.use_system_binaries = true;
+        }
+    }
+
+    fn migrate_legacy_origin(&mut self) {
+        if self.github.owner == LEGACY_GITHUB_OWNER && self.github.repo == DEFAULT_GITHUB_REPO {
+            self.github.owner = DEFAULT_GITHUB_OWNER.to_string();
         }
     }
 

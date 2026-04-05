@@ -609,6 +609,10 @@ fn draw_delete_confirm(f: &mut Frame, area: Rect, target: Option<&std::path::Pat
     let overlay_block = Block::default().style(Style::default().bg(Color::Black));
     f.render_widget(overlay_block, area);
 
+    let is_dir = target
+        .and_then(|path| path.symlink_metadata().ok())
+        .is_some_and(|meta| meta.is_dir());
+
     let w = area.width.min(60);
     let h = 8;
     let x = area.x + (area.width.saturating_sub(w)) / 2;
@@ -622,7 +626,11 @@ fn draw_delete_confirm(f: &mut Frame, area: Rect, target: Option<&std::path::Pat
 
     // Azure-style blue border with white background
     let block = Block::default()
-        .title(" ⚠️  Confirm Delete ")
+        .title(if is_dir {
+            " ⚠️  Confirm Recursive Delete "
+        } else {
+            " ⚠️  Confirm Delete "
+        })
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
         .border_type(BorderType::Rounded)
@@ -643,6 +651,12 @@ fn draw_delete_confirm(f: &mut Frame, area: Rect, target: Option<&std::path::Pat
         None => "selected file".to_string(),
     };
 
+    let warning = if is_dir {
+        "This will delete the directory and all of its contents."
+    } else {
+        "This action cannot be undone."
+    };
+
     let content = vec![
         Line::from(""),
         Line::from(vec![
@@ -656,7 +670,7 @@ fn draw_delete_confirm(f: &mut Frame, area: Rect, target: Option<&std::path::Pat
             Span::raw("?"),
         ]),
         Line::from(""),
-        Line::from("This action cannot be undone.").style(Style::default().fg(Color::Red)),
+        Line::from(warning).style(Style::default().fg(Color::Red)),
         Line::from(""),
         Line::from(vec![
             Span::styled(

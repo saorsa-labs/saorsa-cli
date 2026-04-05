@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script to create a GitHub release with all binaries
+# Script to validate a release build locally and optionally push a release tag.
 # Usage: ./scripts/create-release.sh [version]
 
 set -e
@@ -48,7 +48,7 @@ cargo build --release --workspace
 
 # Verify all binaries exist
 echo -e "${GREEN}Verifying binaries...${NC}"
-for binary in sb sdisk saorsa; do
+for binary in saorsa saorsa-cli sb sdisk; do
     if [ ! -f "target/release/$binary" ]; then
         echo -e "${RED}Error: Binary $binary not found${NC}"
         exit 1
@@ -84,15 +84,16 @@ esac
 # Create local test archive
 echo -e "${GREEN}Creating test archive for $TARGET...${NC}"
 cd target/release
-tar czf ../../saorsa-cli-${TARGET}-test.tar.gz sb sdisk saorsa
+tar czf ../../saorsa-cli-${TARGET}-test.tar.gz saorsa saorsa-cli sb sdisk
 cd ../..
 echo -e "  ✓ Created saorsa-cli-${TARGET}-test.tar.gz"
 
 # Test the binaries
 echo -e "${GREEN}Testing binaries...${NC}"
+./target/release/saorsa --version || echo "  ⚠ saorsa version check failed"
+./target/release/saorsa-cli --version || echo "  ⚠ saorsa-cli version check failed"
 ./target/release/sb --version || echo "  ⚠ sb version check failed"
 ./target/release/sdisk --version || echo "  ⚠ sdisk version check failed"
-./target/release/saorsa --version || echo "  ⚠ saorsa version check failed"
 
 # Create git tag
 echo -e "${GREEN}Creating git tag ${VERSION}...${NC}"
@@ -102,9 +103,10 @@ if [[ "$response" =~ ^[Yy]$ ]]; then
     git tag -a "$VERSION" -m "Release $VERSION
 
 Includes:
+- saorsa: Unified tabbed terminal workspace
+- saorsa-cli: Bootstrapper and updater
 - sb: Saorsa Browser - Terminal Markdown Browser/Editor
-- sdisk: Saorsa Disk - Disk cleanup utility  
-- saorsa: CLI Menu - Interactive menu system"
+- sdisk: Saorsa Disk - Disk cleanup utility"
     
     echo -e "${GREEN}Tag created locally${NC}"
     echo "Push tag to trigger GitHub Actions release? (y/n)"
@@ -112,7 +114,7 @@ Includes:
     if [[ "$response" =~ ^[Yy]$ ]]; then
         git push origin "$VERSION"
         echo -e "${GREEN}Tag pushed! GitHub Actions will now build and create the release.${NC}"
-        echo -e "${YELLOW}Monitor the build at: https://github.com/dirvine/saorsa-cli/actions${NC}"
+        echo -e "${YELLOW}Monitor the build at: https://github.com/saorsa-labs/saorsa-cli/actions${NC}"
     else
         echo -e "${YELLOW}Tag created but not pushed. Push later with: git push origin $VERSION${NC}"
     fi
